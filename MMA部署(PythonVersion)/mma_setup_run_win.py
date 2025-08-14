@@ -11,20 +11,35 @@ import logging
 import socket
 from urllib.parse import urlparse
 
-# 自动安装所需的 Python 库（仅限不在 pyproject.toml 中的库）
-required_libraries = ["python-dotenv", "psutil"]
-for lib in required_libraries:
-    try:
-        __import__(lib)
-    except ImportError:
-        print(f"Installing {lib}...")
-        subprocess.run([sys.executable, "-m", "pip", "install", lib], check=True)
 
-# 导入不在 pyproject.toml 中的库
+def ensure_library_installed(pip_name: str, import_name: str = None, index_url: str = None):
+    """
+    确保第三方库已安装（缺失时静默安装）。
+    参数:
+        pip_name: pip 包名（如 'python-dotenv'）
+        import_name: 导入名（如 'dotenv'），不填则与 pip_name 同名
+        index_url: 指定镜像地址（可选）
+    说明:
+        已安装则直接返回；未安装时使用 pip 安装，安装失败会抛出异常。
+    """
+    mod = import_name or pip_name
+    try:
+        __import__(mod)
+        return
+    except ImportError:
+        print(f"Installing {pip_name}...")
+        cmd = [sys.executable, "-m", "pip", "install", pip_name]
+        if index_url:
+            cmd += ["-i", index_url]
+        subprocess.run(cmd, check=True)
+
+
+ensure_library_installed("python-dotenv", import_name="dotenv", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
+ensure_library_installed("psutil", import_name="psutil", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
+
 from dotenv import load_dotenv, set_key
 import psutil
 
-# 定义 backend/.env.dev 中必需的变量
 required_vars = [
     "COORDINATOR_API_KEY",
     "COORDINATOR_MODEL",
@@ -38,17 +53,14 @@ required_vars = [
     "DEFAULT_MODEL",
 ]
 
-# 配置项目路径和日志
 project_root = Path.cwd()
 log_dir = project_root / "log"
 log_dir.mkdir(exist_ok=True)
-log_file = log_dir / "main.log"
+log_file = log_dir / "mma_setup_run_win.log"
 
 file_handler = logging.FileHandler(log_file, encoding="utf-8", mode="w")
 file_handler.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s - [%(filename)s:%(lineno)d]"
-)
+file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s - [%(filename)s:%(lineno)d]")
 file_handler.setFormatter(file_formatter)
 
 console_handler = logging.StreamHandler()
@@ -61,18 +73,22 @@ logger.setLevel(logging.DEBUG)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-# 从 .env 文件加载环境变量
 env_path = Path(".") / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# 全局变量用于追踪服务进程
 frontend_process = None
 backend_process = None
 redis_process = None
 
 
-# 打开目录选择对话框并返回选择的路径
 def select_directory(title: str) -> str:
+    """
+    打开系统目录选择器，返回用户选择的目录路径。
+    参数:
+        title: 对话框标题
+    返回:
+        目录的字符串路径；若取消则返回空串。
+    """
     root = tk.Tk()
     root.withdraw()
     directory = filedialog.askdirectory(title=title)
@@ -80,8 +96,17 @@ def select_directory(title: str) -> str:
     return directory
 
 
-# 获取或提示用户输入目录路径并保存到 .env 文件
 def get_user_input(env_var: str, title: str) -> str:
+    """
+    从环境变量或目录选择器获取路径，并写回 .env。
+    参数:
+        env_var: 环境变量名（如 'REDIS_PATH'）
+        title: 目录选择器标题
+    返回:
+        有效路径字符串。无效选择会提示并要求重新选择。
+    副作用:
+        当用户选择有效目录时，写入 .env 文件。
+    """
     value = os.getenv(env_var)
     while not value or not Path(value).exists():
         value = select_directory(title)
@@ -93,8 +118,15 @@ def get_user_input(env_var: str, title: str) -> str:
     return value
 
 
-# 检查目录是否包含所有必需文件
 def check_path_valid(path: str, required_files: list) -> bool:
+    """
+    校验路径存在且包含必需文件。
+    参数:
+        path: 待校验目录
+        required_files: 必需文件列表（相对 path）
+    返回:
+        True 表示通过校验，否则 False（并记录日志）。
+    """
     path_obj = Path(path)
     if not path_obj.exists():
         logger.error(f"Directory does not exist: {path}")
@@ -107,16 +139,21 @@ def check_path_valid(path: str, required_files: list) -> bool:
     return True
 
 
-# 启动 Redis 服务器
 def start_redis(redis_path: str) -> bool:
-    """Start Redis server."""
+    """
+    启动 Redis 服务器进程。
+    参数:
+        redis_path: Redis 安装目录（需包含 redis-server.exe）
+    返回:
+        成功返回 True；失败返回 False（失败时清理可能的子进程）。
+    说明:
+        调用后会短暂等待以确认启动，再记录日志。
+    """
     global redis_process
     redis_server = Path(redis_path) / "redis-server.exe"
     if not redis_server.exists():
         logger.error(f"Redis server not found at {redis_server}")
-        messagebox.showerror(
-            "Error", f"Redis server not found at {redis_server}. Please check REDIS_PATH."
-        )
+        messagebox.showerror("Error", f"Redis server not found at {redis_server}. Please check REDIS_PATH.")
         return False
 
     logger.info(f"Starting Redis server: {redis_server}")
@@ -126,7 +163,7 @@ def start_redis(redis_path: str) -> bool:
             creationflags=subprocess.CREATE_NEW_CONSOLE,
             cwd=str(redis_path),
         )
-        time.sleep(2)  # Give Redis some time to initialize
+        time.sleep(2)
         logger.info("Redis started successfully")
         return True
     except Exception as e:
@@ -136,14 +173,20 @@ def start_redis(redis_path: str) -> bool:
         return False
 
 
-# 配置后端和前端环境文件
 def configure_env_files(project_root: Path):
+    """
+    配置 backend/.env.dev 与 frontend/.env.development：
+    1) 若不存在则从示例复制或创建并填充占位键。
+    2) 加载并校验后端必需变量，缺失则退出。
+    3) 确保前端环境文件存在（无示例则退出）。
+    参数:
+        project_root: 项目根目录 Path
+    """
     backend_env = project_root / "backend" / ".env.dev"
     frontend_env = project_root / "frontend" / ".env.development"
     backend_env_example = project_root / "backend" / ".env.dev.example"
     frontend_env_example = project_root / "frontend" / ".env.example"
 
-    # 处理 backend .env.dev 创建或更新
     if not backend_env.exists():
         if backend_env_example.exists():
             shutil.copy(backend_env_example, backend_env)
@@ -166,42 +209,36 @@ def configure_env_files(project_root: Path):
     else:
         logger.info(f"Backend .env already exists at {backend_env}")
 
-    # 提示用户编辑 .env.dev 并设置必需变量
-    logger.info(
-        f"Please edit {backend_env} and set the required variables: {', '.join(required_vars)}"
-    )
-    while True:
-        input("Press Enter when you have finished editing.")
-        load_dotenv(dotenv_path=backend_env, override=True)
-        missing_vars = [var for var in required_vars if not os.getenv(var, "").strip()]
-        if not missing_vars:
-            logger.info("All required variables are set. Proceeding.")
-            break
-        else:
-            logger.error(
-                f"The following required variables are missing or empty: {', '.join(missing_vars)}"
-            )
-            response = input("Do you want to edit the file again? (Y/N): ").strip().upper()
-            if response != "Y":
-                logger.error("Required variables are missing. Exiting.")
-                sys.exit(1)
+    load_dotenv(dotenv_path=backend_env, override=True)
+    missing_vars = [var for var in required_vars if not os.getenv(var, "").strip()]
+    if missing_vars:
+        logger.error(f"Missing required variables in {backend_env}: {', '.join(missing_vars)}")
+        logger.error("Please edit the file and re-run the script.")
+        sys.exit(1)
+    else:
+        logger.info("All required variables are set. Proceeding.")
 
-    # 配置前端 .env.development
     if not frontend_env.exists():
         if frontend_env_example.exists():
             shutil.copy(frontend_env_example, frontend_env)
             logger.info(f"Created {frontend_env} from {frontend_env_example}")
         else:
-            logger.error(
-                f"Frontend .env.example not found at {frontend_env_example}. Cannot create .env.development."
-            )
+            logger.error(f"Frontend .env.example not found at {frontend_env_example}. Cannot create .env.development.")
             sys.exit(1)
     else:
         logger.info(f"Frontend .env.development already exists at {frontend_env}")
 
 
-# 使用 uv 安装后端依赖并设置虚拟环境
 def install_backend_dependencies(project_root: Path):
+    """
+    使用 uv 同步安装后端依赖并检查虚拟环境。
+    参数:
+        project_root: 项目根目录 Path
+    返回:
+        venv 目录 Path 对象（backend/.venv）
+    退出条件:
+        uv 安装失败、sync 失败或 .venv 未创建时会退出进程。
+    """
     backend_dir = project_root / "backend"
     os.chdir(backend_dir)
 
@@ -216,9 +253,7 @@ def install_backend_dependencies(project_root: Path):
         )
         if result.returncode != 0 or not uv_path.exists():
             logger.error(f"Failed to install uv: {result.stderr}")
-            messagebox.showerror(
-                "Error", "Failed to install uv package manager. Please install it manually."
-            )
+            messagebox.showerror("Error", "Failed to install uv package manager. Please install it manually.")
             sys.exit(1)
         logger.info("uv package manager installed successfully")
 
@@ -243,8 +278,16 @@ def install_backend_dependencies(project_root: Path):
     return venv_dir
 
 
-# 获取 npm 的全局二进制目录
 def get_global_bin_dir(npm_path: Path) -> Path:
+    """
+    获取 npm 全局前缀对应的 bin 目录。
+    参数:
+        npm_path: npm.cmd 路径
+    返回:
+        Windows: 前缀目录；Unix: 前缀/bin
+    失败:
+        获取失败将退出程序（已记录日志）。
+    """
     try:
         result = subprocess.run(
             [str(npm_path), "config", "get", "prefix"],
@@ -261,8 +304,16 @@ def get_global_bin_dir(npm_path: Path) -> Path:
         sys.exit(1)
 
 
-# 根据 npm 的全局二进制目录定位 pnpm 命令路径
 def get_pnpm_path(npm_path: Path) -> Path:
+    """
+    根据 npm 全局 bin 目录定位 pnpm 命令路径，不存在则全局安装。
+    参数:
+        npm_path: npm.cmd 路径
+    返回:
+        pnpm.cmd 的 Path
+    失败:
+        安装失败会提示并退出。
+    """
     bin_dir = get_global_bin_dir(npm_path)
     pnpm_path = bin_dir / "pnpm.cmd"
     logger.info(f"Checking if pnpm exists at {pnpm_path}")
@@ -276,16 +327,21 @@ def get_pnpm_path(npm_path: Path) -> Path:
         )
         if result.returncode != 0 or not pnpm_path.exists():
             logger.error(f"Failed to install pnpm: {result.stderr}")
-            messagebox.showerror(
-                "Error", "Failed to install pnpm. Please install it manually using npm."
-            )
+            messagebox.showerror("Error", "Failed to install pnpm. Please install it manually using npm.")
             sys.exit(1)
         logger.info("pnpm installed successfully")
     return pnpm_path
 
 
-# 使用 pnpm 安装前端依赖
 def install_frontend_dependencies(project_root: Path, nodejs_path: str):
+    """
+    使用 pnpm 安装前端依赖。
+    参数:
+        project_root: 项目根目录 Path
+        nodejs_path: Node.js 安装目录（需包含 node.exe 与 npm.cmd）
+    失败:
+        任何一步失败将退出进程。
+    """
     frontend_dir = project_root / "frontend"
     os.chdir(frontend_dir)
 
@@ -325,8 +381,17 @@ def install_frontend_dependencies(project_root: Path, nodejs_path: str):
         sys.exit(1)
 
 
-# 使用 pnpm 启动前端开发服务器
 def run_frontend(project_root: Path, nodejs_path: str) -> subprocess.Popen:
+    """
+    启动前端开发服务器（pnpm run dev）。
+    参数:
+        project_root: 项目根目录 Path
+        nodejs_path: Node.js 安装目录
+    返回:
+        前端子进程对象（subprocess.Popen）
+    失败:
+        Node.js 路径无效会直接退出。
+    """
     global frontend_process
     frontend_dir = project_root / "frontend"
     os.chdir(frontend_dir)
@@ -356,8 +421,17 @@ def run_frontend(project_root: Path, nodejs_path: str) -> subprocess.Popen:
     return frontend_process
 
 
-# 从起始端口扫描可用端口
 def find_available_port(start_port: int = 8000, max_tries: int = 50) -> int:
+    """
+    从指定起始端口扫描可用端口，必要时尝试清理被占用端口。
+    参数:
+        start_port: 起始端口
+        max_tries: 最大尝试次数
+    返回:
+        可用端口号
+    异常:
+        连续扫描失败将抛出 RuntimeError。
+    """
     port = start_port
     for _ in range(max_tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -387,8 +461,16 @@ def find_available_port(start_port: int = 8000, max_tries: int = 50) -> int:
     raise RuntimeError("No available ports found")
 
 
-# 尝试清理端口
 def clear_port(port: int) -> bool:
+    """
+    尝试通过终止占用该端口的进程来清理端口。
+    参数:
+        port: 端口号
+    返回:
+        若发现并清理了占用进程则返回 True，否则 False。
+    注意:
+        仅处理处于 LISTEN/TIME_WAIT 且可获取到 PID 的连接。
+    """
     try:
         cleared = False
         for conn in psutil.net_connections():
@@ -408,21 +490,27 @@ def clear_port(port: int) -> bool:
         return False
 
 
-# 在指定端口上启动后端服务器
 def run_backend(project_root: Path, port: int) -> subprocess.Popen:
+    """
+    在指定端口启动后端（uvicorn 热重载）。
+    参数:
+        project_root: 项目根目录 Path
+        port: 监听端口
+    返回:
+        后端子进程对象（subprocess.Popen）
+    过程:
+        优先使用 backend/.venv 下的 python；加载 .env.dev；轮询端口可用性直至成功或失败退出。
+    """
     global backend_process
     backend_dir = project_root / "backend"
     venv_python = backend_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / "python.exe"
     if not venv_python.exists():
-        logger.warning(
-            f"Virtual environment Python not found at {venv_python}, using system Python"
-        )
+        logger.warning(f"Virtual environment Python not found at {venv_python}, using system Python")
         venv_python = sys.executable
 
-    # 加载 backend/.env.dev 文件中的环境变量
-    env_path = backend_dir / ".env.dev"
-    load_dotenv(dotenv_path=env_path, override=True)
-    logger.info(f"REDIS_URL set to {os.getenv('REDIS_URL')}")  # 验证 REDIS_URL 是否正确加载
+    env_path_local = backend_dir / ".env.dev"
+    load_dotenv(dotenv_path=env_path_local, override=True)
+    logger.info(f"REDIS_URL set to {os.getenv('REDIS_URL')}")
 
     env = os.environ.copy()
     env["ENV"] = "DEV"
@@ -466,8 +554,14 @@ def run_backend(project_root: Path, port: int) -> subprocess.Popen:
     return backend_process
 
 
-# 递归终止进程及其子进程
 def terminate_process_tree(pid: int):
+    """
+    递归终止指定进程及其子进程（优先 terminate，超时后 kill）。
+    参数:
+        pid: 进程号
+    说明:
+        对于不存在的进程会记录并忽略；出现异常时尝试强制 kill。
+    """
     try:
         process = psutil.Process(pid)
         for child in process.children(recursive=True):
@@ -491,10 +585,17 @@ def terminate_process_tree(pid: int):
             pass
 
 
-# 递归删除 Python 缓存文件
 def clear_python_cache(project_root: Path):
+    """
+    递归清理 Python 缓存（__pycache__ 目录与 .pyc 文件）。
+    参数:
+        project_root: 清理的根目录 Path
+    """
     logger.info(f"Clearing Python cache files in {project_root}...")
     cache_count = 0
+    for pycache_dir in project_root.glob("__pycache__"):
+        shutil.rmtree(pycache_dir, ignore_errors=True)
+        cache_count += 1
     for pycache_dir in project_root.glob("**/__pycache__"):
         shutil.rmtree(pycache_dir, ignore_errors=True)
         cache_count += 1
@@ -504,8 +605,12 @@ def clear_python_cache(project_root: Path):
     logger.info(f"Removed {cache_count} Python cache items.")
 
 
-# 关闭前端、后端和 Redis 服务
 def shutdown_services():
+    """
+    关闭前端、后端与 Redis 服务进程，最终记录完成状态。
+    说明:
+        对仍在运行的进程调用 terminate/kill；已退出的进程跳过。
+    """
     global frontend_process, backend_process, redis_process
     logger.info("Shutting down services...")
 
@@ -533,14 +638,25 @@ def shutdown_services():
     logger.info("All services stopped.")
 
 
-# 处理终止信号
 def signal_handler(sig, frame):
+    """
+    统一处理终止信号（SIGINT/SIGTERM），触发优雅退出。
+    参数:
+        sig: 信号编号
+        frame: 当前栈帧（未使用）
+    """
     logger.info(f"Received signal {sig}, initiating shutdown...")
     sys.exit(0)
 
 
-# 主函数：初始化并启动项目服务
 def main():
+    """
+    主入口：清理缓存 -> 选择依赖路径 -> 启动 Redis -> 配置 env -> 安装依赖 ->
+            选端口 -> 写前端 .env -> 安装前端依赖 -> 启动前后端 -> 运行监控循环 ->
+            出错或中断时清理并退出。
+    说明:
+        循环内每秒检查子进程存活；Python 缓存仅在退出时清理一次。
+    """
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -605,20 +721,14 @@ def main():
     logger.info("Frontend running at http://localhost:5173 (check console for exact port)")
 
     try:
-        last_cache_clear = time.time()
         while True:
             time.sleep(1)
-            # 检查服务运行状态
             if frontend_process and frontend_process.poll() is not None:
                 logger.error(f"Frontend process exited with code {frontend_process.poll()}")
                 raise RuntimeError("Frontend crashed")
             if backend_process and backend_process.poll() is not None:
                 logger.error(f"Backend process exited with code {backend_process.poll()}")
                 raise RuntimeError("Backend crashed")
-            # 每60秒清理一次 Python 缓存
-            if time.time() - last_cache_clear >= 60:
-                clear_python_cache(project_root)
-                last_cache_clear = time.time()
     except (KeyboardInterrupt, RuntimeError) as e:
         logger.info(f"Shutting down due to {e}")
     finally:
