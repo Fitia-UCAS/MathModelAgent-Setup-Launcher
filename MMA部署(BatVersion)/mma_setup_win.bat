@@ -1,122 +1,203 @@
 @echo off
+setlocal enabledelayedexpansion
 chcp 65001 > nul
-echo ===== Starting MathModelAgent System (Local Version) =====
 
-REM Check for Python
-echo Checking for Python...
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-  echo Error: Python not found. Please install Python 3.8 or higher.
-  echo Download from: https://www.python.org/downloads/
-  pause
-  exit /b 1
+REM === 入口保护，保证无论是否报错都会停留在最后 ===
+goto :main
+
+:theend
+echo.
+echo ===== Script finished (even if error) =====
+pause
+cmd /k
+
+:main
+echo ===== Starting MathModelAgent System (Local Version / STEP-BY-STEP DEBUG) =====
+
+REM ==========================================================
+REM === Python Check
+REM ==========================================================
+set PY_VERSION=3.12.10
+set PY_URL=https://www.python.org/ftp/python/%PY_VERSION%/python-%PY_VERSION%-embed-amd64.zip
+set PY_PORTABLE_DIR=%cd%\python312-portable
+set PY_SUB_DIR=%PY_PORTABLE_DIR%
+set PY_EXE=%PY_SUB_DIR%\python.exe
+
+call :EnsurePython "%PY_EXE%" "%PY_VERSION%" "%PY_URL%" "%PY_PORTABLE_DIR%" "%PY_SUB_DIR%"
+if errorlevel 1 (
+  echo [ERROR] Python setup failed.
+  goto :theend
 )
 
-REM Check for Node.js
-echo Checking for Node.js...
-set NODE_PORTABLE_DIR=%cd%\nodejs-portable
-set NODE_SUB_DIR=%NODE_PORTABLE_DIR%\node-v20.17.0-win-x64
-set NODE_EXE=%NODE_SUB_DIR%\node.exe
-if not exist "%NODE_SUB_DIR%" (
-  echo Node.js not found. Downloading portable version...
-  powershell -Command "& {Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.17.0/node-v20.17.0-win-x64.zip' -OutFile 'node.zip'}"
-  if exist node.zip (
-    echo Extracting Node.js...
-    powershell -Command "& {Expand-Archive -Path 'node.zip' -DestinationPath '%NODE_PORTABLE_DIR%' -Force}"
-    del node.zip
-  ) else (
-    echo Failed to download Node.js. Download manually from https://nodejs.org/en/download
-    pause
-    exit /b 1
-  )
+:after_python_setup
+set PATH=%PY_SUB_DIR%;%PATH%
+echo Using Portable Python: %PY_EXE%
+python --version || (echo [WARNING] Python not working, please check manually)
+echo === CHECKPOINT: after Python check ===
+
+REM ==========================================================
+REM === Node.js + pnpm Check
+REM ==========================================================
+echo === CHECKPOINT: before Node.js check ===
+set "NODE_PORTABLE_DIR=%cd%\nodejs-portable"
+set "NODE_SUB_DIR=%NODE_PORTABLE_DIR%\node-v22.18.0-win-x64"
+set "NODE_EXE=%NODE_SUB_DIR%\node.exe"
+
+call :EnsureNode "%NODE_EXE%" "%NODE_PORTABLE_DIR%" "%NODE_SUB_DIR%"
+if errorlevel 1 (
+  echo [ERROR] Node.js setup failed.
+  goto :theend
 )
 
-REM Set paths for npm and pnpm
-set NPM_CMD=%NODE_SUB_DIR%\npm.cmd
-set PNPM_CMD=%NODE_SUB_DIR%\pnpm.cmd
+REM === PATH + NPM/PNPM 配置 ===
+set "PATH=%NODE_SUB_DIR%;%PATH%"
+set "NPM_CMD=%NODE_SUB_DIR%\npm.cmd"
+set "PNPM_CMD=%NODE_SUB_DIR%\pnpm.cmd"
 
-REM Install pnpm if not present
-if not exist "%PNPM_CMD%" (
-  echo Installing pnpm...
-  call "%NPM_CMD%" config set prefix "%NODE_SUB_DIR%"
-  call "%NPM_CMD%" install -g pnpm
-  if not exist "%PNPM_CMD%" (
-    echo Error: pnpm installation failed. Check Node.js installation.
-    pause
-    exit /b 1
-  )
-)
+REM === 固定使用已有 pnpm 版本，不再强制升级 ===
+for /f "tokens=*" %%i in ('"%PNPM_CMD%" -v 2^>nul') do set CURRENT_PNPM_VER=%%i
+echo Detected pnpm version %CURRENT_PNPM_VER% (OK)
 
-REM Check for Redis
+echo pnpm detected at: "%PNPM_CMD%"
+call "%PNPM_CMD%" -v
+
+echo === CHECKPOINT: after Node.js check ===
+
+REM ==========================================================
+REM === Redis Check
+REM ==========================================================
 set REDIS_PORTABLE_DIR=%cd%\redis-portable
-if not exist "%REDIS_PORTABLE_DIR%" (
-  echo Redis not found. Downloading portable version...
-  powershell -Command "& {Invoke-WebRequest -Uri 'https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip' -OutFile 'redis-portable.zip'}"
-  if exist redis-portable.zip (
-    echo Extracting Redis...
-    powershell -Command "& {Expand-Archive -Path 'redis-portable.zip' -DestinationPath '%REDIS_PORTABLE_DIR%' -Force}"
-    del redis-portable.zip
-  ) else (
-    echo Failed to download Redis. Download manually from https://github.com/tporadowski/redis/releases
-    pause
-    exit /b 1
-  )
-)
-set REDIS_PATH=%REDIS_PORTABLE_DIR%
+set REDIS_EXE=%REDIS_PORTABLE_DIR%\redis-server.exe
 
-REM Check configuration files
+call :EnsureRedis "%REDIS_EXE%" "%REDIS_PORTABLE_DIR%"
+if errorlevel 1 (
+  echo [ERROR] Redis setup failed.
+  goto :theend
+)
+
+:after_redis_setup
+set REDIS_PATH=%REDIS_PORTABLE_DIR%
+echo === CHECKPOINT: after Redis check ===
+
+REM ==========================================================
+REM === 配置文件检查
+REM ==========================================================
 if not exist .\backend\.env.dev (
   echo Backend config not found. Copying example config...
   copy .\backend\.env.dev.example .\backend\.env.dev
-  echo Please edit .\backend\.env.dev to add your API keys and settings.
-  pause
 )
-
 if not exist .\frontend\.env.development (
   echo Frontend config not found. Copying example config...
   copy .\frontend\.env.example .\frontend\.env.development
-  pause
 )
 
-REM Start Redis server
+REM ==========================================================
+REM === 启动 Redis
+REM ==========================================================
 echo Starting Redis server...
 start "Redis Server" cmd /k "%REDIS_PATH%\redis-server.exe"
 
-REM Configure backend
-echo Configuring backend...
+REM ==========================================================
+REM === Backend - 确保 uv.exe 存在
+REM ==========================================================
+set UV_TOOLS_DIR=%cd%\uv-tools
+if not exist "%UV_TOOLS_DIR%" mkdir "%UV_TOOLS_DIR%"
+set UV_EXE=%UV_TOOLS_DIR%\uv.exe
+
+if not exist "%UV_EXE%" (
+    echo Downloading uv.zip ...
+    powershell -Command ^
+    "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/download/0.8.12/uv-x86_64-pc-windows-msvc.zip' -OutFile 'uv.zip'" || (echo [ERROR] Failed to download uv.zip & goto :theend)
+
+    echo Extracting uv.zip ...
+    powershell -Command ^
+    "Expand-Archive -Path 'uv.zip' -DestinationPath '%UV_TOOLS_DIR%' -Force" || (echo [ERROR] Failed to extract uv.zip & goto :theend)
+
+    if not exist "%UV_EXE%" (
+        echo [ERROR] uv.exe not found after extraction.
+        goto :theend
+    )
+)
+
+set PATH=%UV_TOOLS_DIR%;%PATH%
+
+REM === 配置并启动后端 ===
 cd backend
 if not exist .venv (
-  echo Creating Python virtual environment...
-  python -m venv .venv
+  "%UV_EXE%" venv .venv || (echo [ERROR] Failed to create venv & goto :back_to_root)
 )
-echo Installing backend dependencies...
 call .venv\Scripts\activate.bat
-pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-pip install uv
 set UV_LINK_MODE=copy
-uv sync
-echo Starting backend server...
+"%UV_EXE%" sync || (echo [ERROR] uv sync failed & goto :back_to_root)
+
 start "Backend Server" cmd /k "call .venv\Scripts\activate.bat && set ENV=DEV && uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120"
+
+:back_to_root
 cd ..
 
-REM Configure frontend
-echo Configuring frontend...
+REM ==========================================================
+REM === Frontend
+REM ==========================================================
 cd frontend
-echo Installing frontend dependencies...
-call "%PNPM_CMD%" i
-echo Starting frontend server...
-start "Frontend Server" cmd /k "call "%PNPM_CMD%" run dev"
+
+REM === 安装依赖 (强制用 portable pnpm) ===
+call "%PNPM_CMD%" install
+
+REM === approve-builds - 固定旧版本用法，无 --all 参数 ===
+call "%PNPM_CMD%" approve-builds
+
+REM === 启动前端开发服务器 ===
+start "Frontend Server" cmd /k ""%PNPM_CMD%" run dev"
+
 cd ..
 
 echo.
 echo ===== MathModelAgent System Started Successfully =====
 echo - Backend API: http://localhost:8000
-echo - Frontend: http://localhost:5173
+echo - Frontend:    http://localhost:5173
 echo.
-echo Results will be saved in backend/project/work_dir/xxx/*
-echo - notebook.ipynb: Generated code
-echo - res.md: Results in markdown format
-echo - res.docx: Results in Word format (with images)
-echo.
-echo To stop the system, close the "Redis Server", "Backend Server", and "Frontend Server" windows.
-pause
+goto :theend
+
+
+REM ==========================================================
+REM === Subroutines
+REM ==========================================================
+
+:EnsurePython
+REM %1=PY_EXE %2=PY_VERSION %3=PY_URL %4=PY_PORTABLE_DIR %5=PY_SUB_DIR
+setlocal
+if exist "%~1" (
+  echo Found Python at "%~1"
+  endlocal & exit /b 0
+)
+echo Python not found, downloading...
+powershell -Command "& {Invoke-WebRequest -Uri '%~3' -OutFile 'python312.zip' -UseBasicParsing}" || (endlocal & exit /b 1)
+powershell -Command "& {Expand-Archive -Path 'python312.zip' -DestinationPath '%~4%' -Force}" || (endlocal & exit /b 1)
+if exist "%~1" (endlocal & exit /b 0)
+endlocal & exit /b 1
+
+:EnsureNode
+REM %1=NODE_EXE %2=NODE_PORTABLE_DIR %3=NODE_SUB_DIR
+setlocal
+if exist "%~1" (
+  echo Found Node.js at "%~1"
+  endlocal & exit /b 0
+)
+echo Node.js not found, downloading...
+powershell -Command "& {Invoke-WebRequest -Uri 'https://nodejs.org/dist/v22.18.0/node-v22.18.0-win-x64.zip' -OutFile 'node.zip' -UseBasicParsing}" || (endlocal & exit /b 1)
+powershell -Command "& {Expand-Archive -Path 'node.zip' -DestinationPath '%~2%' -Force}" || (endlocal & exit /b 1)
+if exist "%~1" (endlocal & exit /b 0)
+endlocal & exit /b 1
+
+:EnsureRedis
+REM %1=REDIS_EXE %2=REDIS_PORTABLE_DIR
+setlocal
+if exist "%~1" (
+  echo Found Redis at "%~1"
+  endlocal & exit /b 0
+)
+echo Redis not found, downloading...
+powershell -Command "& {Invoke-WebRequest -Uri 'https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip' -OutFile 'redis-portable.zip' -UseBasicParsing}" || (endlocal & exit /b 1)
+powershell -Command "& {Expand-Archive -Path 'redis-portable.zip' -DestinationPath '%~2%' -Force}" || (endlocal & exit /b 1)
+if exist "%~1" (endlocal & exit /b 0)
+endlocal & exit /b 1
