@@ -2,7 +2,9 @@
 setlocal enabledelayedexpansion
 chcp 65001 > nul
 
-REM === 入口保护，保证无论是否报错都会停留在最后 ===
+REM ==========================================================
+REM === MathModelAgent 启动脚本（Portable 版，Step-by-Step Debug）
+REM ==========================================================
 goto :main
 
 :theend
@@ -10,6 +12,7 @@ echo.
 echo ===== Script finished (even if error) =====
 pause
 cmd /k
+
 
 :main
 echo ===== Starting MathModelAgent System (Local Version / STEP-BY-STEP DEBUG) =====
@@ -35,6 +38,7 @@ echo Using Portable Python: %PY_EXE%
 python --version || (echo [WARNING] Python not working, please check manually)
 echo === CHECKPOINT: after Python check ===
 
+
 REM ==========================================================
 REM === Node.js + pnpm Check
 REM ==========================================================
@@ -52,16 +56,19 @@ if errorlevel 1 (
 REM === PATH + NPM/PNPM 配置 ===
 set "PATH=%NODE_SUB_DIR%;%PATH%"
 set "NPM_CMD=%NODE_SUB_DIR%\npm.cmd"
-set "PNPM_CMD=%NODE_SUB_DIR%\pnpm.cmd"
+set "PNPM_EXE=%NODE_SUB_DIR%\pnpm.exe"
 
-REM === 固定使用已有 pnpm 版本，不再强制升级 ===
+call :EnsurePnpm "%PNPM_EXE%" "%NODE_SUB_DIR%"
+if errorlevel 1 (
+  echo [ERROR] pnpm setup failed.
+  goto :theend
+)
+
+set "PNPM_CMD=%PNPM_EXE%"
 for /f "tokens=*" %%i in ('"%PNPM_CMD%" -v 2^>nul') do set CURRENT_PNPM_VER=%%i
 echo Detected pnpm version %CURRENT_PNPM_VER% (OK)
-
-echo pnpm detected at: "%PNPM_CMD%"
-call "%PNPM_CMD%" -v
-
 echo === CHECKPOINT: after Node.js check ===
+
 
 REM ==========================================================
 REM === Redis Check
@@ -79,6 +86,7 @@ if errorlevel 1 (
 set REDIS_PATH=%REDIS_PORTABLE_DIR%
 echo === CHECKPOINT: after Redis check ===
 
+
 REM ==========================================================
 REM === 配置文件检查
 REM ==========================================================
@@ -91,11 +99,13 @@ if not exist .\frontend\.env.development (
   copy .\frontend\.env.example .\frontend\.env.development
 )
 
+
 REM ==========================================================
 REM === 启动 Redis
 REM ==========================================================
 echo Starting Redis server...
 start "Redis Server" cmd /k "%REDIS_PATH%\redis-server.exe"
+
 
 REM ==========================================================
 REM === Backend - 确保 uv.exe 存在
@@ -134,6 +144,7 @@ start "Backend Server" cmd /k "call .venv\Scripts\activate.bat && set ENV=DEV &&
 
 :back_to_root
 cd ..
+
 
 REM ==========================================================
 REM === Frontend
@@ -199,5 +210,17 @@ if exist "%~1" (
 echo Redis not found, downloading...
 powershell -Command "& {Invoke-WebRequest -Uri 'https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip' -OutFile 'redis-portable.zip' -UseBasicParsing}" || (endlocal & exit /b 1)
 powershell -Command "& {Expand-Archive -Path 'redis-portable.zip' -DestinationPath '%~2%' -Force}" || (endlocal & exit /b 1)
+if exist "%~1" (endlocal & exit /b 0)
+endlocal & exit /b 1
+
+:EnsurePnpm
+REM %1=PNPM_EXE %2=NODE_SUB_DIR
+setlocal
+if exist "%~1" (
+  echo Found pnpm at "%~1"
+  endlocal & exit /b 0
+)
+echo pnpm not found, downloading portable exe...
+powershell -Command "& {Invoke-WebRequest -Uri 'https://github.com/pnpm/pnpm/releases/latest/download/pnpm-win-x64.exe' -OutFile '%~2\pnpm.exe' -UseBasicParsing}" || (endlocal & exit /b 1)
 if exist "%~1" (endlocal & exit /b 0)
 endlocal & exit /b 1
