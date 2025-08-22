@@ -302,15 +302,16 @@ def install_backend_dependencies(project_root: Path):
 
     # --- 使用解析出的 uv 命令执行 sync ---
     logger.info("Installing backend dependencies...")
-    result = subprocess.run(
-        uv_cmd + ["sync"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
-    )
-    if result.returncode != 0:
-        logger.error(f"Failed to sync backend dependencies: {result.stderr}")
+    try:
+        subprocess.run(
+            uv_cmd + ["sync"],
+            check=True,  # 失败直接抛异常
+            text=True,
+            # 不设置 capture_output，这样 uv 的进度在控制台和 log 文件都能看到
+        )
+    except subprocess.CalledProcessError as e:
+        logger.error("Failed to sync backend dependencies (uv). Return code=%s", e.returncode)
+        logger.error("Tip: 检查网络、uv.lock/pyproject.toml、以及是否需要代理/镜像源。")
         sys.exit(1)
 
     logger.info("Backend dependencies installed successfully")
@@ -458,7 +459,7 @@ def run_frontend(project_root: Path, nodejs_path: str) -> subprocess.Popen:
     logger.info("Starting frontend server with 'pnpm run dev'...")
     frontend_process = subprocess.Popen(
         [str(pnpm_path), "run", "dev"],
-        shell=True,
+        shell=False,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         env=env,
     )
