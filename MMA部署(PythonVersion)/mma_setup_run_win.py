@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import os
 import shutil
+import site
 import time
 import signal
 import tkinter as tk
@@ -37,6 +38,37 @@ def ensure_library_installed(pip_name: str, import_name: str = None, index_url: 
 ensure_library_installed("python-dotenv", import_name="dotenv", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
 ensure_library_installed("psutil", import_name="psutil", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
 
+
+def _resolve_uv_cmd() -> list[str] | None:
+    """
+    返回可执行 uv 的命令列表：
+    - 若找到 uv 可执行文件，返回 [<uv_full_path>]
+    - 否则若可作为模块运行，返回 [sys.executable, "-m", "uv"]
+    - 找不到时返回 None
+    """
+    # 1) PATH 中寻找
+    which_uv = shutil.which("uv") or shutil.which("uv.exe")
+    if which_uv:
+        return [which_uv]
+
+    # 2) 常见候选目录
+    candidates = [
+        Path(sys.executable).parent / "Scripts" / "uv.exe",
+        Path(sys.executable).parent / "uv.exe",
+        Path(site.getuserbase()) / "Scripts" / "uv.exe",  # --user 安装位置
+    ]
+    for p in candidates:
+        if p.exists():
+            return [str(p)]
+
+    # 3) 尝试作为模块运行
+    try:
+        __import__("uv")
+        return [sys.executable, "-m", "uv"]
+    except Exception:
+        return None
+
+
 from dotenv import load_dotenv, set_key
 import psutil
 
@@ -49,8 +81,6 @@ required_vars = [
     "CODER_MODEL",
     "WRITER_API_KEY",
     "WRITER_MODEL",
-    "DEFAULT_API_KEY",
-    "DEFAULT_MODEL",
 ]
 
 project_root = Path.cwd()
@@ -230,36 +260,50 @@ def configure_env_files(project_root: Path):
 
 
 def install_backend_dependencies(project_root: Path):
-    """
-    使用 uv 同步安装后端依赖并检查虚拟环境。
-    参数:
-        project_root: 项目根目录 Path
-    返回:
-        venv 目录 Path 对象（backend/.venv）
-    退出条件:
-        uv 安装失败、sync 失败或 .venv 未创建时会退出进程。
-    """
     backend_dir = project_root / "backend"
     os.chdir(backend_dir)
 
-    uv_path = Path(sys.executable).parent / "Scripts" / "uv.exe"
-    if not uv_path.exists():
-        logger.info("Installing uv package manager...")
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "uv"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        if result.returncode != 0 or not uv_path.exists():
-            logger.error(f"Failed to install uv: {result.stderr}")
-            messagebox.showerror("Error", "Failed to install uv package manager. Please install it manually.")
-            sys.exit(1)
-        logger.info("uv package manager installed successfully")
+    # --- 新的 uv 解析逻辑开始 ---
+    uv_cmd = _resolve_uv_cmd()
+    if uv_cmd is None:
+        logger.info("uv not found, installing with pip (user)...")
+        try:
+            # 优先 --user，避免权限问题
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--user", "uv"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            # 尝试不加 --user 的兜底（可能在 venv 中）
+            logger.warning(f"pip install uv --user failed: {e}. Retrying without --user...")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "uv"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
+        # 安装后重新解析一次
+        uv_cmd = _resolve_uv_cmd()
+
+    if uv_cmd is None:
+        message = (
+            "Failed to locate 'uv' after installation. "
+            "Please ensure your User Scripts directory is in PATH "
+            "or install uv manually."
+        )
+        logger.error(message)
+        messagebox.showerror("Error", message)
+        sys.exit(1)
+
+    logger.info(f"Using uv command: {' '.join(uv_cmd)}")
+
+    # --- 使用解析出的 uv 命令执行 sync ---
     logger.info("Installing backend dependencies...")
     result = subprocess.run(
-        [str(uv_path), "sync"],
+        uv_cmd + ["sync"],
         capture_output=True,
         text=True,
         encoding="utf-8",
