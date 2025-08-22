@@ -1,10 +1,20 @@
 # [MathModelAgent](https://github.com/jihe520/MathModelAgent) 部署脚本 （Python 版本）
 
-## 配置好 python、redis、nodejs![image-20250812232025238](./MMA部署(PythonVersion).assets/image-20250812232025238.png)![image-20250812231948821](./MMA部署(PythonVersion).assets/image-20250812231948821.png)
+## 配置好 python、redis、nodejs![image-20250812232025238](./MMA部署(PythonVersion).assets/image-20250812232025238.png)
+
+
+
+![image-20250812231948821](./MMA部署(PythonVersion).assets/image-20250812231948821.png)
+
+
 
 ![image-20250812231919254](./MMA部署(PythonVersion).assets/image-20250812231919254.png)
 
-## 目标脚本复制到MathModelAgent目录下![image-20250812232055977](./MMA部署(PythonVersion).assets/image-20250812232055977.png)
+## 目标脚本复制到MathModelAgent目录下
+
+![image-20250812232055977](./MMA部署(PythonVersion).assets/image-20250812232055977.png)
+
+
 
 ![image-20250812232127129](./MMA部署(PythonVersion).assets/image-20250812232127129.png)
 

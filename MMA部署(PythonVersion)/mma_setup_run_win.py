@@ -10,7 +10,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import logging
 import socket
-from urllib.parse import urlparse
 
 
 def ensure_library_installed(pip_name: str, import_name: str = None, index_url: str = None):
