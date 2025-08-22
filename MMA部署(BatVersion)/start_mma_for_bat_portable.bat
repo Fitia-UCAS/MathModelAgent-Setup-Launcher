@@ -10,7 +10,13 @@ set "REDIS_CLI=%REDIS_DIR%\redis-cli.exe"
 
 set "BACKEND_PY=%ROOT%backend\.venv\Scripts\python.exe"
 set "NODE_DIR=%ROOT%nodejs-portable\node-v22.18.0-win-x64"
-set "PNPM_CMD=%NODE_DIR%\pnpm.cmd"
+
+REM === 优先找 pnpm.exe，其次找 pnpm.cmd ===
+if exist "%NODE_DIR%\pnpm.exe" (
+  set "PNPM_CMD=%NODE_DIR%\pnpm.exe"
+) else (
+  set "PNPM_CMD=%NODE_DIR%\pnpm.cmd"
+)
 
 REM === 启动 Redis 服务 ===
 if not exist "%REDIS_SERVER%" (
@@ -48,7 +54,7 @@ popd
 REM === 启动前端服务 ===
 pushd "%ROOT%frontend"
 if not exist "%PNPM_CMD%" (
-  echo [ERROR] 未找到 %PNPM_CMD% （请确认 nodejs-portable 已解压并初始化过 pnpm）
+  echo [ERROR] 未找到 pnpm（请确认 nodejs-portable 下有 pnpm.exe 或 pnpm.cmd）
   pause & popd & exit /b 1
 )
 
