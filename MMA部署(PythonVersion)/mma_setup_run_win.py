@@ -34,8 +34,23 @@ def ensure_library_installed(pip_name: str, import_name: str = None, index_url: 
         subprocess.run(cmd, check=True)
 
 
+# 添加 keyboard 库
 ensure_library_installed("python-dotenv", import_name="dotenv", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
 ensure_library_installed("psutil", import_name="psutil", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
+ensure_library_installed("keyboard", import_name="keyboard", index_url="https://pypi.tuna.tsinghua.edu.cn/simple")
+
+import keyboard  # 导入 keyboard 库
+
+
+def monitor_exit_signal():
+    """
+    监听键盘的 Ctrl+Q 组合键终止进程。
+    """
+    while True:
+        if keyboard.is_pressed("ctrl+q"):
+            logger.info("Ctrl+Q detected, initiating shutdown...")
+            sys.exit(0)
+        time.sleep(1)  # 检查频率可以根据需求进行调整
 
 
 def _resolve_uv_cmd() -> list[str] | None:
@@ -682,17 +697,6 @@ def shutdown_services():
     logger.info("All services stopped.")
 
 
-def signal_handler(sig, frame):
-    """
-    统一处理终止信号（SIGINT/SIGTERM），触发优雅退出。
-    参数:
-        sig: 信号编号
-        frame: 当前栈帧（未使用）
-    """
-    logger.info(f"Received signal {sig}, initiating shutdown...")
-    sys.exit(0)
-
-
 def main():
     """
     主入口：清理缓存 -> 选择依赖路径 -> 启动 Redis -> 配置 env -> 安装依赖 ->
@@ -701,8 +705,13 @@ def main():
     说明:
         循环内每秒检查子进程存活；Python 缓存仅在退出时清理一次。
     """
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+
+    # 启动监听线程，监控 Ctrl+Q 终止
+    import threading
+
+    exit_thread = threading.Thread(target=monitor_exit_signal)
+    exit_thread.daemon = True  # 确保程序退出时线程也退出
+    exit_thread.start()
 
     clear_python_cache(project_root)
 
@@ -773,7 +782,7 @@ def main():
             if backend_process and backend_process.poll() is not None:
                 logger.error(f"Backend process exited with code {backend_process.poll()}")
                 raise RuntimeError("Backend crashed")
-    except (KeyboardInterrupt, RuntimeError) as e:
+    except RuntimeError as e:
         logger.info(f"Shutting down due to {e}")
     finally:
         shutdown_services()

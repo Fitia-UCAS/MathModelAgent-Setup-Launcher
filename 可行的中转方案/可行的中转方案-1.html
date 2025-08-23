@@ -1,0 +1,892 @@
+<!doctype html>
+<html style='font-size:12px !important'>
+<head>
+<meta charset='UTF-8'><meta name='viewport' content='width=device-width initial-scale=1'>
+
+<style type='text/css'>html {overflow-x: initial !important;}:root { --bg-color: #ffffff; --text-color: #333333; --select-text-bg-color: #B5D6FC; --select-text-font-color: auto; --monospace: "Lucida Console",Consolas,"Courier",monospace; --title-bar-height: 20px; }
+.mac-os-11 { --title-bar-height: 28px; }
+html { font-size: 14px; background-color: var(--bg-color); color: var(--text-color); font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4, h5 { white-space: pre-wrap; }
+body { margin: 0px; padding: 0px; height: auto; inset: 0px; font-size: 1rem; line-height: 1.42857; overflow-x: hidden; background: inherit; }
+iframe { margin: auto; }
+a.url { word-break: break-all; }
+a:active, a:hover { outline: 0px; }
+.in-text-selection, ::selection { text-shadow: none; background: var(--select-text-bg-color); color: var(--select-text-font-color); }
+#write { margin: 0px auto; height: auto; width: inherit; word-break: normal; overflow-wrap: break-word; position: relative; white-space: normal; overflow-x: visible; padding-top: 36px; }
+#write.first-line-indent p { text-indent: 2em; }
+#write.first-line-indent li p, #write.first-line-indent p * { text-indent: 0px; }
+#write.first-line-indent li { margin-left: 2em; }
+.for-image #write { padding-left: 8px; padding-right: 8px; }
+body.typora-export { padding-left: 30px; padding-right: 30px; }
+.typora-export .footnote-line, .typora-export li, .typora-export p { white-space: pre-wrap; }
+.typora-export .task-list-item input { pointer-events: none; }
+@media screen and (max-width: 500px) {
+  body.typora-export { padding-left: 0px; padding-right: 0px; }
+  #write { padding-left: 20px; padding-right: 20px; }
+}
+#write li > figure:last-child { margin-bottom: 0.5rem; }
+#write ol, #write ul { position: relative; }
+img { max-width: 100%; vertical-align: middle; image-orientation: from-image; }
+button, input, select, textarea { color: inherit; font: inherit; }
+input[type="checkbox"], input[type="radio"] { line-height: normal; padding: 0px; }
+*, ::after, ::before { box-sizing: border-box; }
+#write h1, #write h2, #write h3, #write h4, #write h5, #write h6, #write p, #write pre { width: inherit; position: relative; }
+#write svg h1, #write svg h2, #write svg h3, #write svg h4, #write svg h5, #write svg h6, #write svg p { position: static; }
+p { line-height: inherit; }
+h1, h2, h3, h4, h5, h6 { break-after: avoid-page; break-inside: avoid; orphans: 4; }
+p { orphans: 4; }
+h1 { font-size: 2rem; }
+h2 { font-size: 1.8rem; }
+h3 { font-size: 1.6rem; }
+h4 { font-size: 1.4rem; }
+h5 { font-size: 1.2rem; }
+h6 { font-size: 1rem; }
+.md-math-block, .md-rawblock, h1, h2, h3, h4, h5, h6, p { margin-top: 1rem; margin-bottom: 1rem; }
+.hidden { display: none; }
+.md-blockmeta { color: rgb(204, 204, 204); font-weight: 700; font-style: italic; }
+a { cursor: pointer; }
+sup.md-footnote { padding: 2px 4px; background-color: rgba(238, 238, 238, 0.7); color: rgb(85, 85, 85); border-radius: 4px; cursor: pointer; }
+sup.md-footnote a, sup.md-footnote a:hover { color: inherit; text-transform: inherit; text-decoration: inherit; }
+#write input[type="checkbox"] { cursor: pointer; width: inherit; height: inherit; }
+figure { overflow-x: auto; margin: 1.2em 0px; max-width: calc(100% + 16px); padding: 0px; }
+figure > table { margin: 0px; }
+thead, tr { break-inside: avoid; break-after: auto; }
+thead { display: table-header-group; }
+table { border-collapse: collapse; border-spacing: 0px; width: 100%; overflow: auto; break-inside: auto; text-align: left; }
+table.md-table td { min-width: 32px; }
+.CodeMirror-gutters { border-right: 0px; background-color: inherit; }
+.CodeMirror-linenumber { user-select: none; }
+.CodeMirror { text-align: left; }
+.CodeMirror-placeholder { opacity: 0.3; }
+.CodeMirror pre { padding: 0px 4px; }
+.CodeMirror-lines { padding: 0px; }
+div.hr:focus { cursor: none; }
+#write pre { white-space: pre-wrap; }
+#write.fences-no-line-wrapping pre { white-space: pre; }
+#write pre.ty-contain-cm { white-space: normal; }
+.CodeMirror-gutters { margin-right: 4px; }
+.md-fences { font-size: 0.9rem; display: block; break-inside: avoid; text-align: left; overflow: visible; white-space: pre; background: inherit; position: relative !important; }
+.md-fences-adv-panel { width: 100%; margin-top: 10px; text-align: center; padding-top: 0px; padding-bottom: 8px; overflow-x: auto; }
+#write .md-fences.mock-cm { white-space: pre-wrap; }
+.md-fences.md-fences-with-lineno { padding-left: 0px; }
+#write.fences-no-line-wrapping .md-fences.mock-cm { white-space: pre; overflow-x: auto; }
+.md-fences.mock-cm.md-fences-with-lineno { padding-left: 8px; }
+.CodeMirror-line, twitterwidget { break-inside: avoid; }
+svg { break-inside: avoid; }
+.footnotes { opacity: 0.8; font-size: 0.9rem; margin-top: 1em; margin-bottom: 1em; }
+.footnotes + .footnotes { margin-top: 0px; }
+.md-reset { margin: 0px; padding: 0px; border: 0px; outline: 0px; vertical-align: top; background: 0px 0px; text-decoration: none; text-shadow: none; float: none; position: static; width: auto; height: auto; white-space: nowrap; cursor: inherit; -webkit-tap-highlight-color: transparent; line-height: normal; font-weight: 400; text-align: left; box-sizing: content-box; direction: ltr; }
+li div { padding-top: 0px; }
+blockquote { margin: 1rem 0px; }
+li .mathjax-block, li p { margin: 0.5rem 0px; }
+li blockquote { margin: 1rem 0px; }
+li { margin: 0px; position: relative; }
+blockquote > :last-child { margin-bottom: 0px; }
+blockquote > :first-child, li > :first-child { margin-top: 0px; }
+.footnotes-area { color: rgb(136, 136, 136); margin-top: 0.714rem; padding-bottom: 0.143rem; white-space: normal; }
+#write .footnote-line { white-space: pre-wrap; }
+@media print {
+  body, html { border: 1px solid transparent; height: 99%; break-after: avoid; break-before: avoid; font-variant-ligatures: no-common-ligatures; }
+  #write { margin-top: 0px; border-color: transparent !important; padding-top: 0px !important; padding-bottom: 0px !important; }
+  .typora-export * { -webkit-print-color-adjust: exact; }
+  .typora-export #write { break-after: avoid; }
+  .typora-export #write::after { height: 0px; }
+  .is-mac table { break-inside: avoid; }
+  #write > p:nth-child(1) { margin-top: 0px; }
+  .typora-export-show-outline .typora-export-sidebar { display: none; }
+  figure { overflow-x: visible; }
+}
+.footnote-line { margin-top: 0.714em; font-size: 0.7em; }
+a img, img a { cursor: pointer; }
+pre.md-meta-block { font-size: 0.8rem; min-height: 0.8rem; white-space: pre-wrap; background: rgb(204, 204, 204); display: block; overflow-x: hidden; }
+p > .md-image:only-child:not(.md-img-error) img, p > img:only-child { display: block; margin: auto; }
+#write.first-line-indent p > .md-image:only-child:not(.md-img-error) img { left: -2em; position: relative; }
+p > .md-image:only-child { display: inline-block; width: 100%; }
+#write .MathJax_Display { margin: 0.8em 0px 0px; }
+.md-math-block { width: 100%; }
+.md-math-block:not(:empty)::after { display: none; }
+.MathJax_ref { fill: currentcolor; }
+[contenteditable="true"]:active, [contenteditable="true"]:focus, [contenteditable="false"]:active, [contenteditable="false"]:focus { outline: 0px; box-shadow: none; }
+.md-task-list-item { position: relative; list-style-type: none; }
+.task-list-item.md-task-list-item { padding-left: 0px; }
+.md-task-list-item > input { position: absolute; top: 0px; left: 0px; margin-left: -1.2em; margin-top: calc(1em - 10px); border: none; }
+.math { font-size: 1rem; }
+.md-toc { min-height: 3.58rem; position: relative; font-size: 0.9rem; border-radius: 10px; }
+.md-toc-content { position: relative; margin-left: 0px; }
+.md-toc-content::after, .md-toc::after { display: none; }
+.md-toc-item { display: block; color: rgb(65, 131, 196); }
+.md-toc-item a { text-decoration: none; }
+.md-toc-inner:hover { text-decoration: underline; }
+.md-toc-inner { display: inline-block; cursor: pointer; }
+.md-toc-h1 .md-toc-inner { margin-left: 0px; font-weight: 700; }
+.md-toc-h2 .md-toc-inner { margin-left: 2em; }
+.md-toc-h3 .md-toc-inner { margin-left: 4em; }
+.md-toc-h4 .md-toc-inner { margin-left: 6em; }
+.md-toc-h5 .md-toc-inner { margin-left: 8em; }
+.md-toc-h6 .md-toc-inner { margin-left: 10em; }
+@media screen and (max-width: 48em) {
+  .md-toc-h3 .md-toc-inner { margin-left: 3.5em; }
+  .md-toc-h4 .md-toc-inner { margin-left: 5em; }
+  .md-toc-h5 .md-toc-inner { margin-left: 6.5em; }
+  .md-toc-h6 .md-toc-inner { margin-left: 8em; }
+}
+a.md-toc-inner { font-size: inherit; font-style: inherit; font-weight: inherit; line-height: inherit; }
+.footnote-line a:not(.reversefootnote) { color: inherit; }
+.reversefootnote { font-family: ui-monospace, sans-serif; }
+.md-attr { display: none; }
+.md-fn-count::after { content: "."; }
+code, pre, samp, tt { font-family: var(--monospace); }
+kbd { margin: 0px 0.1em; padding: 0.1em 0.6em; font-size: 0.8em; color: rgb(36, 39, 41); background: rgb(255, 255, 255); border: 1px solid rgb(173, 179, 185); border-radius: 3px; box-shadow: rgba(12, 13, 14, 0.2) 0px 1px 0px, rgb(255, 255, 255) 0px 0px 0px 2px inset; white-space: nowrap; vertical-align: middle; }
+.md-comment { color: rgb(162, 127, 3); opacity: 0.6; font-family: var(--monospace); }
+code { text-align: left; vertical-align: initial; }
+a.md-print-anchor { white-space: pre !important; border-width: initial !important; border-style: none !important; border-color: initial !important; display: inline-block !important; position: absolute !important; width: 1px !important; right: 0px !important; outline: 0px !important; background: 0px 0px !important; text-decoration: initial !important; text-shadow: initial !important; }
+.os-windows.monocolor-emoji .md-emoji { font-family: "Segoe UI Symbol", sans-serif; }
+.md-diagram-panel > svg { max-width: 100%; }
+[lang="flow"] svg, [lang="mermaid"] svg { max-width: 100%; height: auto; }
+[lang="mermaid"] .node text { font-size: 1rem; }
+table tr th { border-bottom: 0px; }
+video { max-width: 100%; display: block; margin: 0px auto; }
+iframe { max-width: 100%; width: 100%; border: none; }
+.highlight td, .highlight tr { border: 0px; }
+mark { background: rgb(255, 255, 0); color: rgb(0, 0, 0); }
+.md-html-inline .md-plain, .md-html-inline strong, mark .md-inline-math, mark strong { color: inherit; }
+.md-expand mark .md-meta { opacity: 0.3 !important; }
+mark .md-meta { color: rgb(0, 0, 0); }
+@media print {
+  .typora-export h1, .typora-export h2, .typora-export h3, .typora-export h4, .typora-export h5, .typora-export h6 { break-inside: avoid; }
+}
+.md-diagram-panel .messageText { stroke: none !important; }
+.md-diagram-panel .start-state { fill: var(--node-fill); }
+.md-diagram-panel .edgeLabel rect { opacity: 1 !important; }
+.md-fences.md-fences-math { font-size: 1em; }
+.md-fences-advanced:not(.md-focus) { padding: 0px; white-space: nowrap; border: 0px; }
+.md-fences-advanced:not(.md-focus) { background: inherit; }
+.mermaid-svg { margin: auto; }
+.typora-export-show-outline .typora-export-content { max-width: 1440px; margin: auto; display: flex; flex-direction: row; }
+.typora-export-sidebar { width: 300px; font-size: 0.8rem; margin-top: 80px; margin-right: 18px; }
+.typora-export-show-outline #write { --webkit-flex: 2; flex: 2 1 0%; }
+.typora-export-sidebar .outline-content { position: fixed; top: 0px; max-height: 100%; overflow: hidden auto; padding-bottom: 30px; padding-top: 60px; width: 300px; }
+@media screen and (max-width: 1024px) {
+  .typora-export-sidebar, .typora-export-sidebar .outline-content { width: 240px; }
+}
+@media screen and (max-width: 800px) {
+  .typora-export-sidebar { display: none; }
+}
+.outline-content li, .outline-content ul { margin-left: 0px; margin-right: 0px; padding-left: 0px; padding-right: 0px; list-style: none; overflow-wrap: anywhere; }
+.outline-content ul { margin-top: 0px; margin-bottom: 0px; }
+.outline-content strong { font-weight: 400; }
+.outline-expander { width: 1rem; height: 1.42857rem; position: relative; display: table-cell; vertical-align: middle; cursor: pointer; padding-left: 4px; }
+.outline-expander::before { content: ""; position: relative; font-family: Ionicons; display: inline-block; font-size: 8px; vertical-align: middle; }
+.outline-item { padding-top: 3px; padding-bottom: 3px; cursor: pointer; }
+.outline-expander:hover::before { content: ""; }
+.outline-h1 > .outline-item { padding-left: 0px; }
+.outline-h2 > .outline-item { padding-left: 1em; }
+.outline-h3 > .outline-item { padding-left: 2em; }
+.outline-h4 > .outline-item { padding-left: 3em; }
+.outline-h5 > .outline-item { padding-left: 4em; }
+.outline-h6 > .outline-item { padding-left: 5em; }
+.outline-label { cursor: pointer; display: table-cell; vertical-align: middle; text-decoration: none; color: inherit; }
+.outline-label:hover { text-decoration: underline; }
+.outline-item:hover { border-color: rgb(245, 245, 245); background-color: var(--item-hover-bg-color); }
+.outline-item:hover { margin-left: -28px; margin-right: -28px; border-left: 28px solid transparent; border-right: 28px solid transparent; }
+.outline-item-single .outline-expander::before, .outline-item-single .outline-expander:hover::before { display: none; }
+.outline-item-open > .outline-item > .outline-expander::before { content: ""; }
+.outline-children { display: none; }
+.info-panel-tab-wrapper { display: none; }
+.outline-item-open > .outline-children { display: block; }
+.typora-export .outline-item { padding-top: 1px; padding-bottom: 1px; }
+.typora-export .outline-item:hover { margin-right: -8px; border-right: 8px solid transparent; }
+.typora-export .outline-expander::before { content: "+"; font-family: inherit; top: -1px; }
+.typora-export .outline-expander:hover::before, .typora-export .outline-item-open > .outline-item > .outline-expander::before { content: "−"; }
+.typora-export-collapse-outline .outline-children { display: none; }
+.typora-export-collapse-outline .outline-item-open > .outline-children, .typora-export-no-collapse-outline .outline-children { display: block; }
+.typora-export-no-collapse-outline .outline-expander::before { content: "" !important; }
+.typora-export-show-outline .outline-item-active > .outline-item .outline-label { font-weight: 700; }
+.md-inline-math-container mjx-container { zoom: 0.95; }
+mjx-container { break-inside: avoid; }
+.md-alert.md-alert-note { border-left-color: rgb(9, 105, 218); }
+.md-alert.md-alert-important { border-left-color: rgb(130, 80, 223); }
+.md-alert.md-alert-warning { border-left-color: rgb(154, 103, 0); }
+.md-alert.md-alert-tip { border-left-color: rgb(31, 136, 61); }
+.md-alert.md-alert-caution { border-left-color: rgb(207, 34, 46); }
+.md-alert { padding: 0px 1em; margin-bottom: 16px; color: inherit; border-left: 0.25em solid rgb(0, 0, 0); }
+.md-alert-text-note { color: rgb(9, 105, 218); }
+.md-alert-text-important { color: rgb(130, 80, 223); }
+.md-alert-text-warning { color: rgb(154, 103, 0); }
+.md-alert-text-tip { color: rgb(31, 136, 61); }
+.md-alert-text-caution { color: rgb(207, 34, 46); }
+.md-alert-text { font-size: 0.9rem; font-weight: 700; }
+.md-alert-text svg { fill: currentcolor; position: relative; top: 0.125em; margin-right: 1ch; overflow: visible; }
+.md-alert-text-container::after { content: attr(data-text); text-transform: capitalize; pointer-events: none; margin-right: 1ch; }
+
+
+.CodeMirror { height: auto; }
+.CodeMirror.cm-s-inner { background: inherit; }
+.CodeMirror-scroll { overflow: auto hidden; z-index: 3; }
+.CodeMirror-gutter-filler, .CodeMirror-scrollbar-filler { background-color: rgb(255, 255, 255); }
+.CodeMirror-gutters { border-right: 1px solid rgb(221, 221, 221); background: inherit; white-space: nowrap; }
+.CodeMirror-linenumber { padding: 0px 3px 0px 5px; text-align: right; color: rgb(153, 153, 153); }
+.cm-s-inner .cm-keyword { color: rgb(119, 0, 136); }
+.cm-s-inner .cm-atom, .cm-s-inner.cm-atom { color: rgb(34, 17, 153); }
+.cm-s-inner .cm-number { color: rgb(17, 102, 68); }
+.cm-s-inner .cm-def { color: rgb(0, 0, 255); }
+.cm-s-inner .cm-variable { color: rgb(0, 0, 0); }
+.cm-s-inner .cm-variable-2 { color: rgb(0, 85, 170); }
+.cm-s-inner .cm-variable-3 { color: rgb(0, 136, 85); }
+.cm-s-inner .cm-string { color: rgb(170, 17, 17); }
+.cm-s-inner .cm-property { color: rgb(0, 0, 0); }
+.cm-s-inner .cm-operator { color: rgb(152, 26, 26); }
+.cm-s-inner .cm-comment, .cm-s-inner.cm-comment { color: rgb(170, 85, 0); }
+.cm-s-inner .cm-string-2 { color: rgb(255, 85, 0); }
+.cm-s-inner .cm-meta { color: rgb(85, 85, 85); }
+.cm-s-inner .cm-qualifier { color: rgb(85, 85, 85); }
+.cm-s-inner .cm-builtin { color: rgb(51, 0, 170); }
+.cm-s-inner .cm-bracket { color: rgb(153, 153, 119); }
+.cm-s-inner .cm-tag { color: rgb(17, 119, 0); }
+.cm-s-inner .cm-attribute { color: rgb(0, 0, 204); }
+.cm-s-inner .cm-header, .cm-s-inner.cm-header { color: rgb(0, 0, 255); }
+.cm-s-inner .cm-quote, .cm-s-inner.cm-quote { color: rgb(0, 153, 0); }
+.cm-s-inner .cm-hr, .cm-s-inner.cm-hr { color: rgb(153, 153, 153); }
+.cm-s-inner .cm-link, .cm-s-inner.cm-link { color: rgb(0, 0, 204); }
+.cm-negative { color: rgb(221, 68, 68); }
+.cm-positive { color: rgb(34, 153, 34); }
+.cm-header, .cm-strong { font-weight: 700; }
+.cm-del { text-decoration: line-through; }
+.cm-em { font-style: italic; }
+.cm-link { text-decoration: underline; }
+.cm-error { color: red; }
+.cm-invalidchar { color: red; }
+.cm-constant { color: rgb(38, 139, 210); }
+.cm-defined { color: rgb(181, 137, 0); }
+div.CodeMirror span.CodeMirror-matchingbracket { color: rgb(0, 255, 0); }
+div.CodeMirror span.CodeMirror-nonmatchingbracket { color: rgb(255, 34, 34); }
+.cm-s-inner .CodeMirror-activeline-background { background: inherit; }
+.CodeMirror { position: relative; overflow: hidden; }
+.CodeMirror-scroll { height: 100%; outline: 0px; position: relative; box-sizing: content-box; background: inherit; }
+.CodeMirror-sizer { position: relative; }
+.CodeMirror-gutter-filler, .CodeMirror-hscrollbar, .CodeMirror-scrollbar-filler, .CodeMirror-vscrollbar { position: absolute; z-index: 6; display: none; outline: 0px; }
+.CodeMirror-vscrollbar { right: 0px; top: 0px; overflow: hidden; }
+.CodeMirror-hscrollbar { bottom: 0px; left: 0px; overflow: auto hidden; }
+.CodeMirror-scrollbar-filler { right: 0px; bottom: 0px; }
+.CodeMirror-gutter-filler { left: 0px; bottom: 0px; }
+.CodeMirror-gutters { position: absolute; left: 0px; top: 0px; padding-bottom: 10px; z-index: 3; overflow-y: hidden; }
+.CodeMirror-gutter { white-space: normal; height: 100%; box-sizing: content-box; padding-bottom: 30px; margin-bottom: -32px; display: inline-block; }
+.CodeMirror-gutter-wrapper { position: absolute; z-index: 4; background: 0px 0px !important; border: none !important; }
+.CodeMirror-gutter-background { position: absolute; top: 0px; bottom: 0px; z-index: 4; }
+.CodeMirror-gutter-elt { position: absolute; cursor: default; z-index: 4; }
+.CodeMirror-lines { cursor: text; }
+.CodeMirror pre { border-radius: 0px; border-width: 0px; background: 0px 0px; font-family: inherit; font-size: inherit; margin: 0px; white-space: pre; overflow-wrap: normal; color: inherit; z-index: 2; position: relative; overflow: visible; }
+.CodeMirror-wrap pre { overflow-wrap: break-word; white-space: pre-wrap; word-break: normal; }
+.CodeMirror-code pre { border-right: 30px solid transparent; width: fit-content; }
+.CodeMirror-wrap .CodeMirror-code pre { border-right: none; width: auto; }
+.CodeMirror-linebackground { position: absolute; inset: 0px; z-index: 0; }
+.CodeMirror-linewidget { position: relative; z-index: 2; overflow: auto; }
+.CodeMirror-wrap .CodeMirror-scroll { overflow-x: hidden; }
+.CodeMirror-measure { position: absolute; width: 100%; height: 0px; overflow: hidden; visibility: hidden; }
+.CodeMirror-measure pre { position: static; }
+.CodeMirror div.CodeMirror-cursor { position: absolute; visibility: hidden; border-right: none; width: 0px; }
+.CodeMirror div.CodeMirror-cursor { visibility: hidden; }
+.CodeMirror-focused div.CodeMirror-cursor { visibility: inherit; }
+.cm-searching { background: rgba(255, 255, 0, 0.4); }
+span.cm-underlined { text-decoration: underline; }
+span.cm-strikethrough { text-decoration: line-through; }
+.cm-tw-syntaxerror { color: rgb(255, 255, 255); background-color: rgb(153, 0, 0); }
+.cm-tw-deleted { text-decoration: line-through; }
+.cm-tw-header5 { font-weight: 700; }
+.cm-tw-listitem:first-child { padding-left: 10px; }
+.cm-tw-box { border-style: solid; border-right-width: 1px; border-bottom-width: 1px; border-left-width: 1px; border-color: inherit; border-top-width: 0px !important; }
+.cm-tw-underline { text-decoration: underline; }
+@media print {
+  .CodeMirror div.CodeMirror-cursor { visibility: hidden; }
+}
+
+
+/* FONTS */
+/* VARIABLES */
+:root {
+  /* COLORS */
+  --v-white-100: #ffffff;
+  --v-white-200: #fafafa;
+  --v-gray-1000: #171717;
+  --v-gray-900: #666666;
+  --v-gray-800: #7d7d7d;
+  --v-gray-700: #8f8f8f;
+  --v-gray-600: #a8a8a8;
+  --v-gray-500: #c9c9c9;
+  --v-gray-400: #eaeaea;
+  --v-purple-700: #8e4ec6;
+  --v-purple-900: #7820bc;
+  --v-red-700: #e5484d;
+  --v-red-900: #cb2a2f;
+  --v-amber-700: #f5b047;
+  --v-amber-900: #a35200;
+  --v-green-700: #45a557;
+  --v-green-900: #297a3a;
+  --v-blue-600: #52aeff;
+  --v-blue-700: #0072f5;
+  --v-blue-900: #0068d6;
+  --v-background: #282c34;
+
+  --monospace: "GeistMono", "LXGWWenKaiMono";
+}
+
+/* PRINT */
+@media print {
+  html {
+    font-size: 14px;
+  }
+  pre {
+    page-break-inside: avoid;
+    word-wrap: break-word;
+  }
+  blockquote p {
+    margin-left: 30px;
+  }
+}
+
+/* THEME CUSTOM */
+html {
+  font-size: 17px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background-color: var(--v-white-100);
+  color: var(--v-gray-1000);
+  line-height: 1.6;
+}
+
+#write {
+  margin: 0 auto;
+  padding: 30px;
+  max-width: 860px;
+  font-family: "Geist", "LXGWWenKai";
+}
+
+@media only screen and (min-width: 1400px) {
+  #write {
+    max-width: 1024px;
+  }
+}
+
+@media only screen and (min-width: 1800px) {
+  #write {
+    max-width: 1200px;
+  }
+}
+
+/* YAML */
+pre.md-meta-block {
+  margin: 20px 0px;
+  padding: 10px;
+  font-family: "Geist", "LXGWWenKai";
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--v-gray-900);
+  background-color: var(--v-white-100);
+  border-bottom: 1px dashed var(--v-gray-900);
+}
+
+/* HEADING */
+h1 {
+  font-size: 2.5rem;
+  line-height: 3.5rem;
+}
+
+h2 {
+  font-size: 2rem;
+  line-height: 2.5rem;
+}
+
+h3 {
+  font-size: 1.5em;
+  line-height: 2rem;
+}
+
+h4 {
+  font-size: 1.25em;
+}
+
+h5 {
+  font-size: 1em;
+}
+
+h6 {
+  font-size: 1em;
+  color: var(--v-gray-900);
+}
+
+/* BLOCKQUOTE */
+blockquote {
+  position: relative;
+  padding: 12px;
+  border: 1px solid var(--v-gray-500);
+  line-height: 1.4;
+  border-radius: 8px;
+  color: var(--v-gray-900);
+}
+
+#write blockquote::before {
+  position: absolute;
+  top: 50%;
+
+  transform: translateY(-55%) translateX(5%);
+  font-family: "iconfont" !important;
+  font-size: 16px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  content: "\e826";
+}
+
+#write blockquote > p.md-end-block {
+  margin-left: 30px;
+}
+
+.md-alert {
+  position: relative;
+  padding: 15px;
+  line-height: 1.4;
+}
+
+.md-alert > p:first-child {
+  display: none;
+}
+
+.md-alert > p {
+  margin: 0px 0px 0px 30px;
+  padding: 0px;
+}
+
+.md-alert[mdtype="blockquote"] {
+  padding: 12px;
+}
+
+.md-alert.md-alert-important {
+  border: 1px solid var(--v-purple-700);
+  border-radius: 8px;
+  color: var(--v-purple-900);
+}
+
+.md-alert.md-alert-important::before {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-55%);
+  font-family: "iconfont" !important;
+  font-size: 18px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  content: "\e643";
+}
+
+.md-alert.md-alert-caution {
+  border: 1px solid var(--v-red-700);
+  border-radius: 8px;
+  color: var(--v-red-900);
+}
+
+.md-alert.md-alert-caution::before {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: "iconfont" !important;
+  font-size: 18px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  content: "\e62c";
+}
+
+.md-alert.md-alert-warning {
+  border: 1px solid var(--v-amber-700);
+  border-radius: 8px;
+  color: var(--v-amber-900);
+}
+
+.md-alert.md-alert-warning::before {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-60%);
+  font-family: "iconfont" !important;
+  font-size: 18px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  content: "\e612";
+}
+
+.md-alert.md-alert-tip {
+  border: 1px solid var(--v-green-700);
+  border-radius: 8px;
+  color: var(--v-green-900);
+}
+
+.md-alert.md-alert-tip::before {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: "iconfont" !important;
+  font-size: 16px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  content: "\e600";
+}
+
+.md-alert.md-alert-note {
+  border: 1px solid var(--v-blue-700);
+  border-radius: 8px;
+  color: var(--v-blue-900);
+}
+
+.md-alert.md-alert-note::before {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: "iconfont" !important;
+  font-size: 18px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  content: "\e63c";
+}
+
+/* COMMENT */
+.md-comment {
+  color: var(--v-gray-900);
+  font-family: "GeistMono", "LXGWWenKai";
+}
+
+/* LINK */
+#write a {
+  font-weight: 500;
+  color: var(--v-blue-700);
+  text-decoration: none;
+}
+
+#write a:hover {
+  background-image: linear-gradient(var(--v-blue-700), var(--v-blue-700));
+  background-size: 100% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+}
+
+/* KBD */
+kbd {
+  font-family: "GeistMono", "LXGWWenKai";
+  padding: 2px 8px;
+  vertical-align: baseline;
+  font-size: 0.9rem;
+  color: var(--v-white-100);
+  border: none;
+  box-shadow: none;
+  border-radius: 4px;
+  background-color: var(--v-gray-800);
+}
+
+/* HIGHTLIGHT */
+#write mark {
+  background-color: var(--v-blue-600);
+  border-radius: 3px;
+}
+
+/* HORIZON */
+hr {
+  margin: 10px 0px;
+  border: none;
+  border-bottom: 1px solid var(--v-gray-500);
+}
+
+/* FOOTNOTE */
+sup.md-footnote {
+  font-family: "GeistMono", "LXGWWenKai";
+  color: var(--v-gray-800);
+}
+
+.md-def-name {
+  padding: 0px 8px;
+  font-family: "GeistMono";
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.md-def-footnote .md-def-name::before {
+  content: "[";
+}
+
+.md-def-name::after {
+  right: -17px;
+}
+
+.md-def-content {
+  font-size: 1rem;
+  color: var(--v-gray-1000);
+}
+
+/* FORMULA */
+.md-inline-math {
+  color: var(--v-blue-800);
+}
+
+/* INLINE CODE */
+#write code {
+  padding: 2px 4px;
+  font-family: "GeistMono", "LXGWWenKai";
+  font-size: 0.9rem;
+  background-color: var(--v-gray-500);
+  border-radius: 4px;
+}
+
+/* LIST */
+ul {
+  list-style: none;
+}
+
+#write ul li::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 11.5px;
+  width: 9px;
+  height: 2px;
+  background-color: #3d3d3d;
+}
+
+#write ul li.md-task-list-item::before {
+  content: "";
+  background-color: transparent;
+}
+
+/* IMAGE */
+img {
+  color: transparent;
+  border: none;
+  border-radius: 8px;
+  box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* TABLE */
+#write table {
+  margin: 15px auto;
+  line-height: 1.6em;
+  font-size: 0.875rem;
+  color: var(--v-gray-1000);
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table td {
+  padding: 10px 10px;
+}
+
+thead th {
+  padding: 10px 10px;
+  margin-bottom: 2px;
+  font-weight: 400;
+  color: var(--v-gray-900);
+  border-top: 1px solid var(--v-gray-400);
+  border-bottom: 1px solid var(--v-gray-400) !important;
+  background-color: var(--v-white-200);
+}
+
+thead th:first-child {
+  border-left: 1px solid var(--v-gray-400);
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+
+thead th:last-child {
+  border-right: 1px solid var(--v-gray-400);
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+tbody tr:hover td {
+  background-color: var(--v-gray-400);
+}
+
+tbody tr:hover td:first-child {
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+tbody tr:hover td:last-child {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+thead::after {
+  content: "";
+  display: block;
+  height: 5px;
+  width: 100%;
+}
+
+/* TOC */
+#write .md-toc-h1 a.md-toc-inner {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #000 !important;
+}
+
+#write a.md-toc-inner {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--v-gray-900);
+}
+
+#write a.md-toc-inner:hover {
+  color: var(--v-gray-1000);
+  background: none;
+}
+
+/* CODE BLOCK */
+.md-fences {
+  padding-top: 34px;
+  padding-left: 10px;
+  background-color: var(--v-background);
+  border-radius: 7px;
+}
+.md-fences::before {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  content: "";
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ff5f56;
+  box-shadow: 22px 0px #ffbd2e, 44px 0px #27c93f;
+}
+
+#write .CodeMirror {
+  font-family: "GeistMono", "LXGWWenKai";
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1.4rem;
+  color: var(--v-gray-400);
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+}
+
+.CodeMirror-gutters {
+  border-right: none;
+}
+
+#write .CodeMirror-cursors .CodeMirror-cursor {
+  border-left: 2px solid #528bff !important;
+}
+
+.md-fences .code-tooltip {
+  font-family: "GeistMono", "LXGWWenKai";
+  border-radius: 4px;
+  border: 1px solid var(--v-gray-500);
+  background-color: var(--v-white-200);
+}
+.code-tooltip .ty-input {
+  border: none;
+}
+.code-tooltip .ty-input:focus {
+  border: none;
+}
+
+#write .CodeMirror-activeline-background {
+  background: #2c313c;
+}
+
+#write .md-mathblock-panel .CodeMirror-activeline-background {
+  background: var(--v-gray-400);
+}
+
+.cm-s-inner .CodeMirror-selected {
+  border-radius: 2px;
+  background-color: #404859 !important;
+}
+
+.cm-s-inner .CodeMirror-selectedtext {
+  background-color: transparent !important;
+}
+
+.CodeMirror-cursor {
+  border-left: 1px solid #528bff !important;
+}
+
+.CodeMirror-linenumbers {
+  color: #394051 !important;
+}
+
+.cm-comment {
+  color: #5c6370 !important;
+}
+.cm-string {
+  color: #98c379 !important;
+}
+.cm-variable {
+  color: #e06c75 !important;
+}
+.cm-variable-2 {
+  color: #e5aa69 !important;
+}
+.cm-variable-3 {
+  color: #61afef !important;
+}
+.cm-number {
+  color: #d19a66 !important;
+}
+.cm-property {
+  color: #61afef !important;
+}
+.cm-atom {
+  color: #c678dd !important;
+}
+.cm-keyword {
+  color: #c678dd !important;
+}
+.cm-builtin {
+  color: #56b6c2 !important;
+}
+.cm-def {
+  color: #61afef !important;
+}
+.cm-operator {
+  color: #56b6c2 !important;
+}
+.cm-meta {
+  color: #abb2bf !important;
+}
+.cm-tag {
+  color: #e06c75 !important;
+}
+.cm-attribute {
+  color: #61afef !important;
+}
+.cm-regexp {
+  color: #98c379 !important;
+}
+.cm-link {
+  color: #61afef !important;
+}
+
+.cm-header {
+  color: #e06c63 !important;
+}
+
+/* SOURCE MODE */
+#typora-source .CodeMirror-lines {
+  font-family: "GeistMono", "LXGWWenKaiMono";
+}
+
+
+
+</style><title>可行的中转方案-1</title>
+</head>
+<body class='typora-export os-windows'><div class='typora-export-content'>
+<div id='write'  class=''><h1 id='可行的中转方案-1'><span>可行的中转方案-1</span></h1><p><span>所用网站：</span><a href='https://zhouliuai.online/' target='_blank' class='url'>https://zhouliuai.online/</a></p><h2 id='api令牌添加令牌'><span>API令牌添加令牌</span></h2><p><img src="./可行的中转方案-1.assets/image-20250814230836894.png" referrerpolicy="no-referrer" alt="image-20250814230836894"></p><h2 id='定价处复制模型名'><span>定价处复制模型名</span></h2><p><img src="./可行的中转方案-1.assets/image-20250814230911243.png" referrerpolicy="no-referrer" alt="image-20250814230911243"></p><h2 id='填写模型配置文件如可行的中转方案-1-1-envdev'><span>填写模型配置文件如</span><a href='./可行的中转方案-1-1-.env.dev'><span>可行的中转方案-1-1-.env.dev</span></a></h2><p><img src="./可行的中转方案-1.assets/image-20250814235105456.png" referrerpolicy="no-referrer" alt="image-20250814235105456"></p><p><span>      由此，运行后尝试多次出错如下（更详细的报错见</span><a href='./.intermediate-files/error-logs.txt'><span>error-logs.txt</span></a><span>)</span></p><pre class="md-fences md-end-block md-fences-with-lineno ty-contain-cm modeLoaded" spellcheck="false" lang="python"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="python"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 6.39583px; left: 35px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 31px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"><span><span>​</span>x</span></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: -31px; width: 31px;"></div><div class="CodeMirror-gutter-wrapper CodeMirror-activeline-gutter" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt CodeMirror-linenumber-show" style="left: 0px; width: 23px;">1</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">ERROR</span>: &nbsp; &nbsp;<span class="cm-variable">Exception</span> <span class="cm-keyword">in</span> <span class="cm-variable">ASGI</span> <span class="cm-variable">application</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">2</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">Traceback</span> (<span class="cm-variable">most</span> <span class="cm-variable">recent</span> <span class="cm-variable">call</span> <span class="cm-variable">last</span>):</span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">3</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp;<span class="cm-variable cm-error">File</span> <span class="cm-string">"E:\repo2\MathModelAgent-bat\backend\.venv\Lib\site-packages\uvicorn\protocols\http\httptools_impl.py"</span>, <span class="cm-variable">line</span> <span class="cm-number">409</span>, <span class="cm-keyword">in</span> <span class="cm-variable">run_asgi</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">4</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp;<span class="cm-variable">result</span> <span class="cm-operator">=</span> <span class="cm-keyword">await</span> <span class="cm-variable">app</span>( &nbsp;<span class="cm-comment"># type: ignore[func-returns-value]</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">5</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span class="cm-operator">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">6</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="" cm-zwsp="">
+</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">7</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-operator">...</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">8</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="" cm-zwsp="">
+</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">9</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp;<span class="cm-variable">File</span> <span class="cm-string">"D:\Python3.12.9\Lib\re\__init__.py"</span>, <span class="cm-variable">line</span> <span class="cm-number">186</span>, <span class="cm-keyword">in</span> <span class="cm-variable">sub</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt CodeMirror-linenumber-show" style="left: 0px; width: 23px;">10</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp;<span class="cm-keyword">return</span> <span class="cm-variable">_compile</span>(<span class="cm-variable">pattern</span>, <span class="cm-variable">flags</span>).<span class="cm-property">sub</span>(<span class="cm-variable">repl</span>, <span class="cm-variable">string</span>, <span class="cm-variable">count</span>)</span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">11</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span class="cm-operator">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">12</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">TypeError</span>: <span class="cm-variable">expected</span> <span class="cm-variable">string</span> <span class="cm-keyword">or</span> <span class="cm-builtin">bytes</span><span class="cm-operator">-</span><span class="cm-variable">like</span> <span class="cm-builtin">object</span>, <span class="cm-variable">got</span> <span class="cm-string">'NoneType'</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt CodeMirror-linenumber-show" style="left: 0px; width: 23px;">13</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">agent_name</span> <span class="cm-variable">WriterAgent</span></span></pre></div></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 235px;"></div><div class="CodeMirror-gutters" style="height: 235px;"><div class="CodeMirror-gutter CodeMirror-linenumbers" style="width: 31px;"></div></div></div></div></pre><p><span>      经gpt5调研并查看源码发现是该问题</span><strong><span>不是数据偶发</span></strong><span>，而是</span><strong><span>协议层的常见情况</span></strong><span>：当模型决定“用工具而不是回答文本”时，</span><code>content=None</code><span> 是完全正常的。而当前实现默认「一定有文本」，所以每次遇到工具调用分支都会崩。日志也显示了这条路径：CoderAgent 第一次 EDA 子任务就触发了多次 </span><code>execute_code</code><span> 的 tool call，随之 </span><code>msg.content: None</code><span> 被发布到 Redis，接着 </span><code>split_footnotes(None)</code><span> 直接类型错误。</span></p><p><span>      修改</span><code>llm.py</code><span>与</span><code>common_utils.py</code><span>文件后 </span><a href='./.intermediate-files/20250814-233425-d5fbc657.json'><span>对话ID及输出</span></a><span>记录在此。MathModelAgent 终端运行正常直至因额度用尽报错如下：</span></p><pre class="md-fences md-end-block md-fences-with-lineno ty-contain-cm modeLoaded" spellcheck="false" lang="python" style="break-inside: unset;"><div class="CodeMirror cm-s-inner cm-s-null-scroll CodeMirror-wrap" lang="python"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 6.39583px; left: 35px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 31px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"><pre><span>xxxxxxxxxx</span></pre><div class="CodeMirror-linenumber CodeMirror-gutter-elt"><div>20</div></div></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: -31px; width: 31px;"></div><div class="CodeMirror-gutter-wrapper CodeMirror-activeline-gutter" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt CodeMirror-linenumber-show" style="left: 0px; width: 23px;">1</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">Give</span> <span class="cm-variable">Feedback</span> <span class="cm-operator">/</span> <span class="cm-variable">Get</span> <span class="cm-variable">Help</span>: <span class="cm-variable">https</span>:<span class="cm-operator">//</span><span class="cm-variable">github</span>.<span class="cm-property">com</span><span class="cm-operator">/</span><span class="cm-variable">BerriAI</span><span class="cm-operator">/</span><span class="cm-variable">litellm</span><span class="cm-operator">/</span><span class="cm-variable">issues</span><span class="cm-operator">/</span><span class="cm-variable">new</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">2</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">LiteLLM</span>.<span class="cm-property">Info</span>: <span class="cm-variable">If</span> <span class="cm-variable">you</span> <span class="cm-variable">need</span> <span class="cm-variable">to</span> <span class="cm-variable">debug</span> <span class="cm-variable">this</span> <span class="cm-variable">error</span>, <span class="cm-variable">use</span> `<span class="cm-variable">litellm</span>.<span class="cm-property">_turn_on_debug</span>()<span class="cm-string">'.</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">3</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="" cm-zwsp="">
+</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">4</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">On</span> <span class="cm-variable">Async</span> <span class="cm-variable">Failure</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">5</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">ERROR</span>: &nbsp; &nbsp;<span class="cm-variable">Exception</span> <span class="cm-keyword">in</span> <span class="cm-variable">ASGI</span> <span class="cm-variable">application</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">6</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">Traceback</span> (<span class="cm-variable">most</span> <span class="cm-variable">recent</span> <span class="cm-variable">call</span> <span class="cm-variable">last</span>):</span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">7</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp;<span class="cm-variable cm-error">File</span> <span class="cm-string">"E:\repo2\MathModelAgent-bat\backend\.venv\Lib\site-packages\litellm\llms\openai\openai.py"</span>, <span class="cm-variable">line</span> <span class="cm-number">790</span>, <span class="cm-keyword">in</span> <span class="cm-variable">acompletion</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">8</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp;<span class="cm-variable">headers</span>, <span class="cm-variable">response</span> <span class="cm-operator">=</span> <span class="cm-keyword">await</span> <span class="cm-variable-2">self</span>.<span class="cm-property">make_openai_chat_completion_request</span>(</span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">9</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;<span class="cm-operator">^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt CodeMirror-linenumber-show" style="left: 0px; width: 23px;">10</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp;<span class="cm-variable">File</span> <span class="cm-string">"E:\repo2\MathModelAgent-bat\backend\.venv\Lib\site-packages\litellm\litellm_core_utils\logging_utils.py"</span>, <span class="cm-variable">line</span> <span class="cm-number">135</span>, <span class="cm-keyword">in</span> <span class="cm-variable">async_wrapper</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">11</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp;<span class="cm-variable">result</span> <span class="cm-operator">=</span> <span class="cm-keyword">await</span> <span class="cm-variable">func</span>(<span class="cm-operator">*</span><span class="cm-variable">args</span>, <span class="cm-operator">**</span><span class="cm-variable">kwargs</span>)</span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">12</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span class="cm-operator">^^^^^^^^^^^^^^^^^^^^^^^^^^^</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">13</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="" cm-zwsp="">
+</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">14</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-operator">...</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">15</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="" cm-zwsp="">
+</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">16</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp;<span class="cm-variable">File</span> <span class="cm-string">"E:\repo2\MathModelAgent-bat\backend\.venv\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py"</span>, <span class="cm-variable">line</span> <span class="cm-number">2232</span>, <span class="cm-keyword">in</span> <span class="cm-variable">exception_type</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">17</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp;<span class="cm-keyword">raise</span> <span class="cm-variable">e</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">18</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp;<span class="cm-variable">File</span> <span class="cm-string">"E:\repo2\MathModelAgent-bat\backend\.venv\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py"</span>, <span class="cm-variable">line</span> <span class="cm-number">467</span>, <span class="cm-keyword">in</span> <span class="cm-variable">exception_type</span></span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt" style="left: 0px; width: 23px;">19</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"> &nbsp; &nbsp;<span class="cm-keyword">raise</span> <span class="cm-variable">APIError</span>(</span></pre></div><div style="position: relative;"><div class="CodeMirror-gutter-wrapper" style="left: -31px;"><div class="CodeMirror-linenumber CodeMirror-gutter-elt CodeMirror-linenumber-show" style="left: 0px; width: 23px;">20</div></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">litellm</span>.<span class="cm-property">exceptions</span>.<span class="cm-property">APIError</span>: <span class="cm-variable">litellm</span>.<span class="cm-property">APIError</span>: <span class="cm-variable">APIError</span>: <span class="cm-variable">OpenAIException</span> <span class="cm-operator">-</span> <span class="cm-variable">user</span> <span class="cm-variable">quota</span> <span class="cm-keyword">is</span> <span class="cm-keyword">not</span> <span class="cm-variable">enough</span> (<span class="cm-variable">request</span> <span class="cm-builtin">id</span>: <span class="cm-number">202508142336245664973333</span><span class="cm-variable">OV93TUg</span>)</span></pre></div></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 420px;"></div><div class="CodeMirror-gutters" style="height: 420px;"><div class="CodeMirror-gutter CodeMirror-linenumbers" style="width: 31px;"></div></div></div></div></pre><p><span>修改后的文件备份如下：</span><a href='./.debug-files/common_utils.py'><span>修改后的common_utils.py文件</span></a><span>、</span><a href='./.debug-files/llm.py'><span>修改后的llm.py文件</span></a>
+<span>修改前的文件备份如下：</span><a href='./.backup-files/common_utils.py'><span>修改前的common_utils.py文件</span></a><span>、</span><a href='./.backup-files/llm.py'><span>修改前的llm.py文件</span></a></p><p><span>可能是我全部填写agent为gpt-4o的缘故总报上述第一个代码块的错误，经子木同学上传配置填写除thinking填写chatgpt5模型，其余模型填写deepseek模型后无报错。相关配置文件如</span><a href='可行的中转方案-1-2-.env.dev'><span>可行的中转方案-1-2-.env.dev</span></a></p><p><img src="./可行的中转方案-1.assets/image-20250815011653226.png" referrerpolicy="no-referrer" alt="image-20250815011653226"></p><p><span>该文件作中转探索的记录。仅供参考，切勿当作标准。</span></p><p>&nbsp;</p></div></div>
+</body>
+</html>
