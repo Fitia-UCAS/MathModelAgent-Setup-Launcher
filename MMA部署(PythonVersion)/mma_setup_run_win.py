@@ -5,7 +5,6 @@ import os
 import shutil
 import site
 import time
-import signal
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import logging

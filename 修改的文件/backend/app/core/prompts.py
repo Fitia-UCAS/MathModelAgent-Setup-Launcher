@@ -24,7 +24,7 @@ COORDINATOR_PROMPT = f"""
 你将按照如下要求,整理问题格式{FORMAT_QUESTIONS_PROMPT}
 
 注意事项：
-1. 严禁输出除 JSON 或拒绝文字以外的任何解释。
+1. 严禁输出除 JSON 以外的任何文字。
 2. 如果输出 JSON，必须完整遵循 {FORMAT_QUESTIONS_PROMPT} 中给定的字段定义和约束。
 3. 所有小问必须能在用户原始输入中找到对应内容（允许轻度清洗前缀符号/空白）。
 4. 保证 JSON 是合法且能被 `json.loads` 直接解析的单个对象。
