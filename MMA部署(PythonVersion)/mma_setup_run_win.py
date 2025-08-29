@@ -97,7 +97,7 @@ required_vars = [
 ]
 
 project_root = Path.cwd()
-log_dir = project_root / "log"
+log_dir = project_root / "backend/logs/"
 log_dir.mkdir(exist_ok=True)
 log_file = log_dir / "mma_setup_run_win.log"
 
