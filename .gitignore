@@ -4,3 +4,15 @@ contents.txt
 ./utils
 
 MMA-Changes/*
+*.pyc
+/MMA-Changes-Full-1/backend/app/example
+MMA-Changes-Full-1/backend/app/schemas/__init__.py
+MMA-Changes-Full-1/backend/app/__init__.py
+MMA-Changes-Full-1/backend/app/core/__init__.py
+MMA-Changes-Full-1/backend/app/core/agents/__init__.py
+MMA-Changes-Full-1/backend/app/core/llm/__init__.py
+MMA-Changes-Full-1/backend/app/models/__init__.py
+MMA-Changes-Full-1/backend/app/routers/__init__.py
+MMA-Changes-Full-1/backend/app/tests/__init__.py
+MMA-Changes-Full-1/backend/app/tools/__init__.py
+MMA-Changes-Full-1/backend/app/utils/__init__.py
