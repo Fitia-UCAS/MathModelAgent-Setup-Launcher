@@ -9,9 +9,66 @@ from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT
 from app.utils.common_utils import get_current_files
 import json
+import re
 from app.core.prompts import get_reflection_prompt, get_completion_check_prompt
 from app.core.functions import coder_tools
 from icecream import ic
+
+
+def _strip_md_fences(s: str) -> str:
+    """去掉 ``` / ```json / ```python 这种 Markdown 代码栅栏。"""
+    s = s.strip()
+    if s.startswith("```"):
+        # 去头
+        s = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", s)
+        # 去尾
+        s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+def _safe_get_code_from_arguments(args_raw) -> str:
+    """
+    尽可能稳妥地从 tool.arguments 中拿到 code。
+    支持:
+      - dict: {"code": "..."}
+      - 纯 JSON 字符串
+      - 带 ```json / ```python 栅栏的 JSON/文本
+      - “\"code\": \"...\"” 宽松匹配
+      - “code: ...” 键值对风格
+      - 最后兜底：把原始字符串当作代码
+    """
+    if args_raw is None:
+        return ""
+
+    # SDK 可能已经是 dict
+    if isinstance(args_raw, dict):
+        return args_raw.get("code", "") or ""
+
+    if not isinstance(args_raw, str):
+        return ""
+
+    s = _strip_md_fences(args_raw)
+
+    # 先尝试严格 JSON
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            return obj.get("code", "") or ""
+    except Exception:
+        pass
+
+    # 宽松匹配 "code": "...."
+    m = re.search(r'"code"\s*:\s*"(.*)"\s*\}?$', s, flags=re.DOTALL)
+    if m:
+        return m.group(1)
+
+    # YAML/键值对风格：code: ....
+    m2 = re.search(r"(?im)^\s*code\s*:\s*(.+)\s*$", s, flags=re.DOTALL)
+    if m2:
+        return m2.group(1).strip()
+
+    # 兜底：把整个串当作代码
+    return s
 
 
 # 代码手
@@ -108,10 +165,11 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         SystemMessage(content=f"代码手调用{fn_name}工具"),
                     )
 
-                    # 解析代码参数
+                    # 解析代码参数（稳健版）
                     try:
-                        code_args = json.loads(tool_call.function.arguments)
-                        code = code_args.get("code", "")
+                        code = _safe_get_code_from_arguments(getattr(tool_call.function, "arguments", None))
+                        if not isinstance(code, str):
+                            code = str(code or "")
                     except Exception as e:
                         code = ""
                         logger.exception("解析 tool.arguments 失败")
@@ -226,7 +284,8 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     await redis_manager.publish_message(
                         self.task_id,
                         SystemMessage(
-                            content=f"代码手尚未运行代码，请调用 execute_code 并执行用于 {subtask_title} 的代码", type="info"
+                            content=f"代码手尚未运行代码，请调用 execute_code 并执行用于 {subtask_title} 的代码",
+                            type="info",
                         ),
                     )
 

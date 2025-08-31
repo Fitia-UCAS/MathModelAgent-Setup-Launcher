@@ -101,7 +101,8 @@ class MathModelWorkFlow(WorkFlow):
             )
             raise
 
-        scholar = OpenAlexScholar(task_id=self.task_id, email=settings.OPENALEX_EMAIL)
+        # ❶ 删掉这一整段（学术检索实例创建）
+        # scholar = OpenAlexScholar(task_id=self.task_id, email=settings.OPENALEX_EMAIL)
 
         await redis_manager.publish_message(
             self.task_id,
@@ -122,12 +123,13 @@ class MathModelWorkFlow(WorkFlow):
             code_interpreter=code_interpreter,
         )
 
+        # ❷ 创建 WriterAgent 时，不再注入 scholar（显式传 None，更直观）
         writer_agent = WriterAgent(
             task_id=problem.task_id,
             model=writer_llm,
             comp_template=problem.comp_template,
             format_output=problem.format_output,
-            scholar=scholar,
+            scholar=None,  # 禁用外部检索
         )
 
         flows = Flows(self.questions)
@@ -156,10 +158,9 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"代码手求解成功 {key}", type="success"),
             )
 
-            # ✅ 这里使用 code_response（与你当前的 Pydantic 模型一致）
             writer_prompt = flows.get_writer_prompt(
                 key,
-                coder_response.code_response,   # 修正字段名
+                coder_response.code_response,
                 code_interpreter,
                 config_template,
             )
@@ -170,7 +171,11 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             # 扫描全部可用图片
-            all_images = collect_png_paths_by_task(self.task_id) or []
+            all_images_raw = collect_png_paths_by_task(self.task_id) or []
+
+            # 规范化为相对路径（去掉可能的 task_id/ 前缀）
+            prefix = f"{self.task_id}/"
+            all_images = [p[len(prefix) :] if p.startswith(prefix) else p for p in all_images_raw]
 
             if key == "eda":
                 available_images = [p for p in all_images if p.startswith("eda/figures/")]
@@ -204,6 +209,8 @@ class MathModelWorkFlow(WorkFlow):
         # 关闭沙盒
         try:
             await code_interpreter.cleanup()
+        except Exception as e:
+            logger.warning(f"清理沙盒出现问题：{e}")
         finally:
             logger.info(user_output.get_res())
 

@@ -31,21 +31,5 @@ coder_tools = [
 
 
 ## writeragent tools
-writer_tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_papers",
-            "description": "Search for papers using a query string.",
-            "strict": True,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The query string"}
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
+# 外部文献检索功能已禁用，防止写作阶段因检索失败中断
+writer_tools = []

@@ -75,11 +75,11 @@ class WriterAgent(Agent):
         self.current_chat_turns += 1
         await self.append_chat_history({"role": "user", "content": prompt})
 
-        # 首轮生成/或发起工具
+        # 禁用工具暴露（不允许任何外部工具被调用）
         response = await self.model.chat(
             history=self.chat_history,
-            tools=writer_tools,
-            tool_choice="auto",
+            tools=[],          # 不暴露任何工具
+            tool_choice=None,  # 不允许选择工具
             agent_name=self.__class__.__name__,
             sub_title=sub_title,
         )
@@ -90,192 +90,22 @@ class WriterAgent(Agent):
         assistant_content = getattr(assistant_msg_obj, "content", "") or ""
         assistant_tool_calls = getattr(assistant_msg_obj, "tool_calls", None)
 
+        # 若模型仍“幻想”生成了 tool_calls，记录并忽略，继续正文
         if assistant_tool_calls:
-            logger.info("检测到工具调用 in WriterAgent")
+            logger.info("WriterAgent 收到工具调用（已禁用，忽略）")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="写作手收到工具调用，但已禁用所有外部工具，已忽略。", type="warning"),
+            )
+            await self.append_chat_history({
+                "role": "tool",
+                "name": "disabled",
+                "tool_call_id": f"call_{uuid.uuid4().hex[:12]}",
+                "content": "所有外部工具已禁用，忽略此次调用。",
+            })
 
-            # 规范化写入 assistant（content 为空可省略该键）
-            safe_tool_calls = []
-            try:
-                for tc in assistant_tool_calls:
-                    tc_id = getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else None)
-                    fn = getattr(tc, "function", None) or (tc.get("function") if isinstance(tc, dict) else {}) or {}
-                    fn_name = (
-                        getattr(fn, "name", None)
-                        or (fn.get("name") if isinstance(fn, dict) else None)
-                        or "unknown"
-                    )
-                    raw_args = getattr(fn, "arguments", None) or (fn.get("arguments") if isinstance(fn, dict) else None)
-                    if isinstance(raw_args, (dict, list)):
-                        fn_args = json.dumps(raw_args, ensure_ascii=False)
-                    elif raw_args is None:
-                        fn_args = ""
-                    else:
-                        fn_args = str(raw_args)
-                    if not isinstance(tc_id, str) or not tc_id:
-                        tc_id = f"call_{uuid.uuid4().hex[:12]}"
-                    safe_tool_calls.append(
-                        {"id": tc_id, "type": "function", "function": {"name": fn_name, "arguments": fn_args}}
-                    )
-            except Exception:
-                safe_tool_calls = None
-
-            if safe_tool_calls is not None:
-                assistant_msg = {"role": "assistant", "tool_calls": safe_tool_calls}
-                if (assistant_content or "").strip():
-                    assistant_msg["content"] = assistant_content
-                await self.append_chat_history(assistant_msg)
-            else:
-                await self.append_chat_history({"role": "assistant", "content": assistant_content})
-
-            # 仅处理第一个工具（可扩展为并行/串行多工具）
-            tool_call = assistant_tool_calls[0]
-            tool_id = getattr(tool_call, "id", None) or (tool_call.get("id") if isinstance(tool_call, dict) else None)
-            fn_obj = getattr(tool_call, "function", None) or (tool_call.get("function") if isinstance(tool_call, dict) else {}) or {}
-            fn_name = getattr(fn_obj, "name", None) or (fn_obj.get("name") if isinstance(fn_obj, dict) else None)
-
-            if fn_name == "search_papers":
-                logger.info("WriterAgent 调用 search_papers")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"写作手调用{fn_name}工具"),
-                )
-
-                # 解析 query
-                try:
-                    raw_args = getattr(fn_obj, "arguments", None) or (fn_obj.get("arguments") if isinstance(fn_obj, dict) else None)
-                    if isinstance(raw_args, str):
-                        args_obj = json.loads(raw_args) if raw_args.strip() else {}
-                    elif isinstance(raw_args, (dict, list)):
-                        args_obj = raw_args
-                    else:
-                        args_obj = {}
-                    query = args_obj.get("query")
-                except Exception as e:
-                    query = None
-                    logger.exception("解析 search_papers 参数失败")
-                    await redis_manager.publish_message(
-                        self.task_id,
-                        SystemMessage(content=f"解析 search_papers 参数失败: {e}", type="error"),
-                    )
-                    await self.append_chat_history(
-                        {
-                            "role": "tool",
-                            "name": "search_papers",
-                            "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
-                            "content": f"解析 search_papers 参数失败: {e}",
-                        }
-                    )
-                    return WriterResponse(
-                        response_content=f"解析 search_papers 参数失败: {e}",
-                        footnotes=[],
-                    )
-
-                await redis_manager.publish_message(
-                    self.task_id,
-                    WriterMessage(input={"query": query}),
-                )
-
-                # scholar 为空兜底
-                if self.scholar is None:
-                    msg = "search_papers 工具不可用：scholar 实例为空。"
-                    logger.error(msg)
-                    await self.append_chat_history(
-                        {
-                            "role": "tool",
-                            "name": "search_papers",
-                            "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
-                            "content": msg,
-                        }
-                    )
-                    return WriterResponse(
-                        response_content=msg,
-                        footnotes=[],
-                    )
-
-                # 调用 scholar 搜索文献
-                try:
-                    papers = await self.scholar.search_papers(query)
-                except Exception as e:
-                    error_msg = f"搜索文献失败: {str(e)}"
-                    logger.error(error_msg)
-                    await self.append_chat_history(
-                        {
-                            "role": "tool",
-                            "name": "search_papers",
-                            "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
-                            "content": error_msg,
-                        }
-                    )
-                    return WriterResponse(
-                        response_content=error_msg,
-                        footnotes=[],
-                    )
-
-                # 体积限制：仅取前 N 篇 + 总字符上限
-                TOP_N = 25
-                try:
-                    top_papers = papers[:TOP_N] if isinstance(papers, list) else papers
-                except Exception:
-                    top_papers = papers
-
-                # —— 源头生成脚注元组：(text, url)
-                try:
-                    if isinstance(top_papers, list):
-                        for p in top_papers[:5]:
-                            if isinstance(p, dict):
-                                text, url = paper_to_footnote_tuple(p)
-                                footnotes.append((text, url))
-                except Exception:
-                    pass
-
-                papers_str = self.scholar.papers_to_str(top_papers)
-                if not isinstance(papers_str, str):
-                    try:
-                        papers_str = json.dumps(papers_str, ensure_ascii=False)
-                    except Exception:
-                        papers_str = str(papers_str)
-
-                MAX_CHARS = 30000
-                if len(papers_str) > MAX_CHARS:
-                    papers_str = papers_str[:MAX_CHARS] + "\n\n[...检索结果过长，已截断，建议缩小查询范围或二次筛选...]"
-
-                await self.append_chat_history(
-                    {
-                        "role": "tool",
-                        "name": "search_papers",
-                        "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
-                        "content": papers_str,
-                    }
-                )
-
-                # 继续对话
-                next_response = await self.model.chat(
-                    history=self.chat_history,
-                    tools=writer_tools,
-                    tool_choice="auto",
-                    agent_name=self.__class__.__name__,
-                    sub_title=sub_title,
-                )
-                assistant_msg_obj = next_response.choices[0].message
-                assistant_content = getattr(assistant_msg_obj, "content", "") or ""
-                await self.append_chat_history({"role": "assistant", "content": assistant_content})
-            else:
-                logger.warning(f"WriterAgent 收到未知工具调用: {fn_name}, 仅记录不执行")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"写作手收到未知工具调用: {fn_name}", type="warning"),
-                )
-                await self.append_chat_history(
-                    {
-                        "role": "tool",
-                        "name": fn_name or "unknown",
-                        "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
-                        "content": "收到未知工具调用，未执行。请改用已注册的工具或直接继续写作。",
-                    }
-                )
-        else:
-            # 无工具调用，直接追加 assistant 内容
-            await self.append_chat_history({"role": "assistant", "content": assistant_content})
+        # 直接追加 assistant 内容
+        await self.append_chat_history({"role": "assistant", "content": assistant_content})
 
         # 最终文本
         response_content = assistant_content or ""
@@ -318,10 +148,11 @@ class WriterAgent(Agent):
             )
 
             await self.append_chat_history({"role": "user", "content": correction_prompt})
+            # 纠错对话也禁用工具
             fix_resp = await self.model.chat(
                 history=self.chat_history,
-                tools=writer_tools,
-                tool_choice="auto",
+                tools=[],          # 不暴露任何工具
+                tool_choice=None,  # 不允许选择工具
                 agent_name=self.__class__.__name__,
                 sub_title=sub_title,
             )
@@ -331,6 +162,7 @@ class WriterAgent(Agent):
 
         # 源头即严格类型，无需再归一化
         return WriterResponse(response_content=response_content, footnotes=footnotes)
+
 
     # ============== 图片工具 ==============
 
