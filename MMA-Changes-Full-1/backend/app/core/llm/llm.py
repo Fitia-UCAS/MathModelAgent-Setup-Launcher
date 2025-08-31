@@ -38,7 +38,8 @@ CONTEXT_TOKEN_HARD_LIMIT = 120_000
 litellm.callbacks = [agent_metrics]
 
 # ========= 最后一跳消息清洗（确保 messages 可被 OpenAI/DeepSeek 正确反序列化） =========
-_ALLOWED_KEYS = {"role", "content", "name", "tool_calls", "tool_call_id", "function_call", "function"}
+# 仅保留顶层允许的字段：role/content/name/tool_calls/tool_call_id
+_ALLOWED_KEYS = {"role", "content", "name", "tool_calls", "tool_call_id"}
 
 
 def _json_dumps_safe(obj: Any) -> str:
@@ -143,10 +144,10 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
     """
     最后一跳强制清洗（OpenAI/DeepSeek 兼容）：
     1) 仅保留 _ALLOWED_KEYS 字段
-    2) 规范 assistant.tool_calls（字符串化 arguments / 补 id / type=function）
-    3) 将 role=='tool' 的消息转换为 role=='function'，并尽量填充 name、content
-    4) tool/function 响应按出现顺序绑定最近一次未消费的 tool_call_id；孤儿响应直接丢弃
-    5) 丢弃纯空消息（system 允许为空；其余 role 为空则去除），移除 None 值
+    2) 规范 assistant.tool_calls（字符串化 arguments / 补 id / type='function'）
+    3) 将任何遗留的 role=='function' 统一改为 role=='tool'（OpenAI 合法角色只有 system/user/assistant/tool）
+    4) tool 响应按出现顺序绑定最近一次未消费的 tool_call_id；无匹配 id 的“孤儿工具响应”直接丢弃
+    5) 丢弃纯空消息（system 允许为空；其它角色为空则去除），并清理 None 值
     """
     result: List[Dict[str, Any]] = []
     if not history:
@@ -162,14 +163,16 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
 
         # -------- 角色规范化 --------
         role = m.get("role") or base.get("role") or "assistant"
-        # 统一支持的角色集合：system / user / assistant / function
-        # 注：我们把上游的 "tool" 全部转换为 "function"
-        if role == "tool":
-            role = "function"
-            # function 消息必须有 name；没有则兜底
+        # 统一支持的角色集合：system / user / assistant / tool
+        # 注：任何遗留的 "function" 都视为 "tool"
+        if role == "function":
+            role = "tool"
             if not isinstance(m.get("name"), str) or not m.get("name"):
                 m["name"] = base.get("name") or "tool"
-        elif role not in ("system", "user", "assistant", "function"):
+        elif role == "tool":
+            # 合法，保持
+            pass
+        elif role not in ("system", "user", "assistant"):
             logger.warning(f"[sanitize] unexpected role={role} at idx={idx}, fallback to 'assistant'")
             role = "assistant"
         m["role"] = role
@@ -194,8 +197,8 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
             except Exception:
                 content = ""
 
-        # 对“function（原 tool）消息”尝试从其它字段提取可读文本
-        if role == "function" and (not content or not content.strip()):
+        # 对“tool（含遗留 function）消息”尝试从其它字段提取可读文本
+        if role == "tool" and (not content or not content.strip()):
             extracted = _extract_tool_text(base) if isinstance(base, dict) else ""
             content = extracted or ""
 
@@ -204,18 +207,18 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
             # 其它角色一律写回 content
             m["content"] = content
 
-        # -------- 为 function（原 tool）确保 tool_call_id 配对 --------
-        if role == "function":
+        # -------- 为 tool 消息确保 tool_call_id 配对 --------
+        if role == "tool":
             tcid = m.get("tool_call_id")
             if not isinstance(tcid, str) or not tcid:
                 # 按顺序分配上一个 assistant.tool_calls 的 id
                 if pending_tool_ids:
                     assigned = pending_tool_ids.pop(0)
                     m["tool_call_id"] = assigned
-                    logger.debug(f"[sanitize] function msg auto-bound tool_call_id={assigned} at idx={idx}")
+                    logger.debug(f"[sanitize] tool msg auto-bound tool_call_id={assigned} at idx={idx}")
                 else:
                     # 没有可匹配的 id，属于孤儿工具响应：直接丢弃，避免非法消息
-                    logger.warning(f"[sanitize] dropping orphan function message at idx={idx} (no matching tool_call_id)")
+                    logger.warning(f"[sanitize] dropping orphan tool message at idx={idx} (no matching tool_call_id)")
                     continue
 
         # -------- 剔除 None 值，避免严格校验问题 --------
@@ -225,12 +228,12 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
 
         # -------- 丢弃纯空消息（除 system 外）--------
         # - system 允许空（有时只作为指令容器）
-        # - user/assistant/function 若全空且无 tool_calls/无 name/无 tool_call_id，直接丢弃
+        # - user/assistant/tool 若全空且无 tool_calls/无 name/无 tool_call_id，直接丢弃
         is_meaningless = (
             (role != "system")
             and (not m.get("content", "") or not m.get("content", "").strip())
             and (not m.get("tool_calls"))
-            and (role != "function" or not (m.get("name") or m.get("tool_call_id")))
+            and (role != "tool" or not (m.get("name") or m.get("tool_call_id")))
         )
         if is_meaningless:
             logger.debug(f"[sanitize] drop empty message at idx={idx}, role={role}")
@@ -254,6 +257,7 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
         pass
 
     return result
+
 
 # =======================================================================================
 
@@ -374,7 +378,13 @@ class LLM:
                 await asyncio.sleep(delay)
 
     def _validate_and_fix_tool_calls(self, history: list) -> list:
-        """验证并修复工具调用完整性（兼容 role='tool' 与 role='function'）"""
+        """
+        验证并修复工具调用完整性（OpenAI 新规范）：
+        1) 合法角色只允许：system / user / assistant / tool
+        2) assistant 消息里的 tool_calls[*].id 必须与后续某条 role='tool' 的消息的 tool_call_id 匹配
+        3) 若发现历史遗留的 role='function'，在此阶段就地改为 role='tool'
+        4) 未匹配到的“孤儿 tool 消息”丢弃；assistant 中未被消费的 tool_calls 也会被移除
+        """
         if not history:
             return history
 
@@ -384,12 +394,13 @@ class LLM:
         i = 0
 
         def _is_tool_resp(m: dict) -> bool:
+            # 兼容历史：把 'function' 视为 'tool' 并在写入时改回 'tool'
             return isinstance(m, dict) and m.get("role") in ("tool", "function")
 
         while i < len(history):
             msg = history[i]
 
-            # 1) assistant 带 tool_calls 的消息：逐一检查是否有后续响应（tool/function）
+            # 1) assistant 带 tool_calls 的消息：逐一检查是否有后续响应（tool）
             if isinstance(msg, dict) and msg.get("tool_calls"):
                 ic(f"📞 发现tool_calls消息在位置 {i}")
                 valid_tool_calls, invalid_tool_calls = [], []
@@ -404,10 +415,13 @@ class LLM:
                     found_response = False
                     for j in range(i + 1, len(history)):
                         m2 = history[j]
-                        if _is_tool_resp(m2) and m2.get("tool_call_id") == tool_call_id:
-                            ic(f"  ✅ 找到匹配响应在位置 {j}")
-                            found_response = True
-                            break
+                        if _is_tool_resp(m2):
+                            # 若是遗留 'function'，仅用于判断，稍后写回统一改 'tool'
+                            m2_id = m2.get("tool_call_id")
+                            if m2_id == tool_call_id:
+                                ic(f"  ✅ 找到匹配响应在位置 {j}")
+                                found_response = True
+                                break
 
                     if found_response:
                         valid_tool_calls.append(tc)
@@ -421,7 +435,7 @@ class LLM:
                     fixed_history.append(fixed_msg)
                     ic(f"  🔧 保留 {len(valid_tool_calls)} 个有效tool_calls，移除 {len(invalid_tool_calls)} 个无效的")
                 else:
-                    # 没有有效 tool_call：如果还有文本，就保留文本；否则丢弃
+                    # 没有有效 tool_call：如果还有文本，就保留文本；否则丢弃整条
                     cleaned_msg = {k: v for k, v in msg.items() if k != "tool_calls"}
                     content = (cleaned_msg.get("content") or "").strip()
                     if content:
@@ -446,12 +460,12 @@ class LLM:
                             break
 
                 if found_call:
-                    # 统一将遗留的 'tool' 规范为 'function'，与 sanitize 最终一致
-                    if role == "tool":
+                    # 统一将遗留的 'function' 改为 'tool'，与 OpenAI 规范一致
+                    if role == "function":
                         msg = dict(msg)
-                        msg["role"] = "function"
+                        msg["role"] = "tool"
                     fixed_history.append(msg)
-                    ic(f"  ✅ 保留有效的工具响应")
+                    ic(f"  ✅ 保留有效的工具响应（role=tool）")
                 else:
                     ic(f"  🗑️ 移除孤立的工具响应: {tool_call_id}")
 
@@ -467,6 +481,7 @@ class LLM:
             ic(f"✅ 验证通过，无需修复")
 
         return fixed_history
+
 
 
     def _truncate_history_by_tokens(self, history: list, token_limit: int) -> list:

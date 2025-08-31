@@ -17,7 +17,7 @@ class Agent:
         task_id: str,
         model: LLM,
         max_chat_turns: int = 500,  # 单个agent最大对话轮次
-        max_memory: int = 50,  # 最大记忆轮次（条数兜底）
+        max_memory: int = 100,  # 最大记忆轮次（条数兜底）
     ) -> None:
         self.task_id = task_id
         self.model = model
@@ -65,12 +65,13 @@ class Agent:
 
     async def append_chat_history(self, msg: dict) -> None:
         """
-        稳健的消息追加函数 - 替换原有实现
+        稳健的消息追加函数 - 标准化为 OpenAI Chat Completions 规范（只用 system/user/assistant/tool）
         功能：
         1) 规范化入参（把对象/非 dict 情况转换为 dict）
         2) 强制保证 msg['content'] 为字符串（绝不为 None）
-        3) 对 role == 'tool' 的消息，优先从 output/result/msg 字段抽取文本并填充 content
-        4) 保持原有的合并相邻 user / tool_calls 标准化 / 内存清理逻辑
+        3) 对工具响应消息（role == 'tool'）尽量抽取可读文本并填充 content
+        4) 标准化 tool_calls（arguments→字符串；type=function）
+        5) 保持原有合并相邻 user / 内存清理 / 安全切割等逻辑
         """
         # —— 规范化入参 —— #
         if not isinstance(msg, dict):
@@ -85,20 +86,21 @@ class Agent:
         # 保证 role 字段存在且为字符串
         msg["role"] = msg.get("role", "assistant") or "assistant"
 
+        # ★ 关键：不要把 'tool' 改成 'function'（OpenAI 合法角色只有 system/user/assistant/tool）
+        # 如果历史里曾混入 'function'（旧实现遗留），建议在 llm.py 的 sanitize 中兜底改回 'tool'，这里不做角色替换
+
         # —— 重要：确保 content 字段永远为字符串（非 None） —— #
-        # 若 content 本身为空或 None，稍后对 tool 消息会填充
         raw_content = msg.get("content", "")
         if raw_content is None:
             raw_content = ""
 
-        # 如果是 tool 类型且 content 为空，尝试从常见字段中抽取文本：
+        # 如果是 tool 且 content 为空，尝试从常见字段中抽取文本
         if msg["role"] == "tool" and (not raw_content or str(raw_content).strip() == ""):
             extracted_parts = []
 
-            # 1) 优先查看 msg.get("output")（常见为 list）
+            # 1) 优先查看 msg.get("output")（常见为 list/dict/str）
             out = msg.get("output") or msg.get("outputs") or msg.get("result") or msg.get("results")
             if out is not None:
-                # 如果是列表，逐项抽取
                 if isinstance(out, (list, tuple)):
                     for item in out:
                         if isinstance(item, dict):
@@ -109,7 +111,6 @@ class Agent:
                                     extracted_parts.append(str(v))
                                     break
                             else:
-                                # fallback: dump whole dict small excerpt
                                 try:
                                     extracted_parts.append(json.dumps(item, ensure_ascii=False))
                                 except Exception:
@@ -117,7 +118,6 @@ class Agent:
                         else:
                             extracted_parts.append(str(item))
                 elif isinstance(out, dict):
-                    # 抽取典型键
                     for k in ("msg", "message", "text", "result", "content"):
                         v = out.get(k)
                         if v:
@@ -131,7 +131,7 @@ class Agent:
                 else:
                     extracted_parts.append(str(out))
 
-            # 2) 再尝试 tool-specific 字段
+            # 2) 再尝试其它常见字段
             if not extracted_parts:
                 for k in ("text", "stdout", "stderr", "data", "value"):
                     v = msg.get(k)
@@ -144,7 +144,7 @@ class Agent:
                         else:
                             extracted_parts.append(str(v))
 
-            # 3) 尝试从嵌套的 tool_call / tool_result 中抽取
+            # 3) 尝试从嵌套的 tool_result / tool_response / tool_outputs 中抽取
             if not extracted_parts:
                 tc = msg.get("tool_result") or msg.get("tool_response") or msg.get("tool_outputs")
                 if tc is not None:
@@ -155,11 +155,10 @@ class Agent:
 
             # 最终填充 content（去重并按行拼接）
             if extracted_parts:
-                # 过滤空字符串并去重（但保留顺序）
                 seen = set()
                 parts = []
                 for p in extracted_parts:
-                    s = p.strip()
+                    s = (p or "").strip()
                     if not s:
                         continue
                     if s in seen:
@@ -227,7 +226,6 @@ class Agent:
 
         # 为 tool 消息尽可能设置 tool_call_id（如果存在）
         if msg.get("role") == "tool" and "tool_call_id" not in msg:
-            # 兼容多种命名
             msg["tool_call_id"] = msg.get("tool_call_id") or msg.get("id") or msg.get("tool_id") or None
 
         # 最终把消息追加
@@ -243,11 +241,12 @@ class Agent:
                     continue
                 c = m.get("content") or ""
                 try:
-                    total += token_counter(c, self.model.model)
+                    total += token_counter(self.model.model, c)
                 except Exception:
                     total += max(1, len(c) // 3)
             return total
 
+        # 工具响应（tool）不触发内存清理
         if msg.get("role") != "tool":
             ic("触发内存清理判定")
             try:
@@ -261,7 +260,7 @@ class Agent:
                 ic("超过消息条数兜底阈值，执行 clear_memory()")
                 await self.clear_memory()
         else:
-            ic("跳过内存清理(tool消息)")
+            ic("跳过内存清理(tool 消息)")
 
     async def clear_memory(self):
         """当聊天历史超过限制时，使用 simple_chat 进行“重量版”总结压缩"""
@@ -343,7 +342,7 @@ class Agent:
             if i >= len(self.chat_history):
                 continue
 
-            # 检查从这个位置开始是否是安全的（没有孤立的tool消息）
+            # 检查从这个位置开始是否是安全的（没有孤立的 function/tool 消息）
             is_safe = self._is_safe_cut_point(i)
             ic(f"检查位置 {i}: 安全={is_safe}")
             if is_safe:
@@ -356,19 +355,19 @@ class Agent:
         return fallback
 
     def _is_safe_cut_point(self, start_idx: int) -> bool:
-        """检查从指定位置开始切割是否安全（不会产生孤立的tool消息）"""
+        """检查从指定位置开始切割是否安全（不会产生孤立的 tool 消息）"""
         if start_idx >= len(self.chat_history):
             ic(f"切割点 {start_idx} >= 历史长度，安全")
             return True
 
-        # 检查切割后的消息序列是否有孤立的tool消息
+        # 检查切割后的消息序列是否有孤立的 tool 消息
         tool_messages = []
         for i in range(start_idx, len(self.chat_history)):
             msg = self.chat_history[i]
             if isinstance(msg, dict) and msg.get("role") == "tool":
                 tool_call_id = msg.get("tool_call_id")
                 tool_messages.append((i, tool_call_id))
-                ic(f"发现tool消息在位置 {i}, tool_call_id={tool_call_id}")
+                ic(f"发现工具响应消息在位置 {i}, tool_call_id={tool_call_id}")
 
                 # 向前查找对应的tool_calls消息
                 if tool_call_id:
@@ -391,14 +390,14 @@ class Agent:
                                 break
 
                     if not found_tool_call:
-                        ic(f"❌ tool消息 {tool_call_id} 没有找到对应的tool_call，切割点不安全")
+                        ic(f"❌ 工具响应 {tool_call_id} 没有找到对应的tool_call，切割点不安全")
                         return False
 
-        ic(f"切割点 {start_idx} 安全，检查了 {len(tool_messages)} 个tool消息")
+        ic(f"切割点 {start_idx} 安全，检查了 {len(tool_messages)} 个工具响应消息")
         return True
 
     def _get_safe_fallback_history(self) -> list:
-        """获取安全的后备历史记录，确保不会有孤立的tool消息"""
+        """获取安全的后备历史记录，确保不会有孤立的 tool 消息"""
         if not self.chat_history:
             return []
 
@@ -414,7 +413,7 @@ class Agent:
                 safe_history.extend(self.chat_history[start_idx:])
                 return safe_history
 
-        # 如果都不安全，只保留最后一条非tool消息
+        # 如果都不安全，只保留最后一条非 tool 消息
         for i in range(len(self.chat_history) - 1, -1, -1):
             msg = self.chat_history[i]
             if isinstance(msg, dict) and msg.get("role") != "tool":
@@ -427,7 +426,7 @@ class Agent:
         """查找最后一个未匹配的tool call的索引"""
         ic("开始查找未匹配的tool_call")
 
-        # 从后往前查找，寻找没有对应tool response的tool call
+        # 从后往前查找，寻找没有对应工具响应的 tool call
         for i in range(len(self.chat_history) - 1, -1, -1):
             msg = self.chat_history[i]
 
@@ -435,7 +434,7 @@ class Agent:
             if isinstance(msg, dict) and "tool_calls" in msg and msg["tool_calls"]:
                 ic(f"在位置 {i} 发现tool_calls消息")
 
-                # 检查每个tool call是否都有对应的response
+                # 检查每个tool call是否都有对应的 response（function/tool）
                 for tool_call in msg["tool_calls"]:
                     tool_call_id = (
                         tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
@@ -443,16 +442,16 @@ class Agent:
                     ic(f"检查tool_call_id: {tool_call_id}")
 
                     if tool_call_id:
-                        # 在后续消息中查找对应的tool response
+                        # 在后续消息中查找对应的工具响应
                         response_found = False
                         for j in range(i + 1, len(self.chat_history)):
                             response_msg = self.chat_history[j]
                             if (
                                 isinstance(response_msg, dict)
-                                and response_msg.get("role") == "tool"
+                                and response_msg.get("role") in ("tool", "function")
                                 and response_msg.get("tool_call_id") == tool_call_id
                             ):
-                                ic(f"找到匹配的tool响应在位置 {j}")
+                                ic(f"找到匹配的工具响应在位置 {j}")
                                 response_found = True
                                 break
 
@@ -475,30 +474,26 @@ class Agent:
         return "\n".join(formatted)
 
     def _ensure_first_after_system_user(self, history: list) -> list:
-        """
-        保证：system 消息之后第一条是 user 消息。
-        - 如果有相邻的 assistant/role 非 user，强制修改。
-        """
         if not history:
             return [{"role": "user", "content": "[空对话启动] 继续。"}]
 
-        # 找到第一个非 system 的消息
         i = 0
         while i < len(history) and isinstance(history[i], dict) and history[i].get("role") == "system":
             i += 1
 
-        # 如果全是 system 消息，插入 user 消息
         if i >= len(history):
             return history + [{"role": "user", "content": "[承接上文上下文] 继续。"}]
 
-        # 如果第一条非 system 不是 user
         first_msg = history[i]
         if first_msg.get("role") != "user":
+            # 如果是assistant但包含tool_calls，就不要强插user，避免打断“调用→结果”序列
+            if first_msg.get("role") == "assistant" and first_msg.get("tool_calls"):
+                return history
             content = (first_msg.get("content") or "").strip()
             if first_msg.get("role") == "assistant" and content.startswith("[历史对话总结"):
                 first_msg["role"] = "user"
                 history[i] = first_msg
             else:
                 history = history[:i] + [{"role": "user", "content": "[承接上文上下文] 继续。"}] + history[i:]
-
         return history
+

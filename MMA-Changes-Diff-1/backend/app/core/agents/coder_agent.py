@@ -90,7 +90,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
             # 有工具调用（常见路径）
             if assistant_tool_calls:
                 logger.info("检测到工具调用")
-                # 先把 assistant 内容规范化写入历史
+                # 先把 assistant 内容规范化写入历史（append_chat_history 会把 tool_calls 规范化）
                 await self.append_chat_history(
                     {"role": "assistant", "content": assistant_content, "tool_calls": assistant_tool_calls}
                 )
@@ -115,6 +115,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     except Exception as e:
                         code = ""
                         logger.exception("解析 tool.arguments 失败")
+                        # 工具解析报错 → 工具结果消息（role='tool'）写回
                         await self.append_chat_history(
                             {
                                 "role": "tool",
@@ -126,6 +127,16 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         retry_count += 1
                         last_error_message = f"解析工具参数失败: {e}"
                         continue
+
+                    # 如果 code 为空，跳过工具调用
+                    if not code:
+                        logger.warning("代码为空，跳过工具调用")
+                        # 可以发送系统消息通知
+                        await redis_manager.publish_message(
+                            self.task_id,
+                            SystemMessage(content="任务跳过：代码为空，未执行工具调用", type="warning"),
+                        )
+                        continue  # 跳过当前循环，进入下一轮
 
                     await redis_manager.publish_message(
                         self.task_id,
@@ -141,7 +152,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     except Exception as e:
                         text_to_gpt, error_occurred, error_message = "", True, f"执行工具时异常: {e}"
 
-                    # 将 tool 响应写回历史
+                    # 将工具执行结果写回历史（role='tool'）
                     if error_occurred:
                         await self.append_chat_history(
                             {
@@ -168,7 +179,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         # 继续下一轮
                         continue
                     else:
-                        # 成功执行的 tool 响应写回历史
+                        # 成功执行的工具响应写回历史（role='tool'）
                         text_to_gpt_str = (
                             "\n".join(text_to_gpt) if isinstance(text_to_gpt, (list, tuple)) else str(text_to_gpt)
                         )
@@ -193,7 +204,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     logger.warning(f"收到未知工具调用: {fn_name}，跳过处理。")
                     await self.append_chat_history(
                         {
-                            "role": "tool",
+                            "role": "tool",  # 工具结果消息必须是 role='tool'
                             "tool_call_id": tool_id,
                             "name": fn_name or "unknown",
                             "content": "收到未知工具调用，未执行。",

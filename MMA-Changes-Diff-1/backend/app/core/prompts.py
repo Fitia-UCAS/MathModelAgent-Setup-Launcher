@@ -143,6 +143,11 @@ CODER_PROMPT = f"""
         ├── datasets/
         ├── figures/
         └── reports/
+        ques6/
+        ├── ques6.py
+        ├── datasets/
+        ├── figures/
+        └── reports/
         sensitivity_analysis/
         ├── sensitivity_analysis.py
         ├── datasets/
@@ -229,8 +234,7 @@ def get_writer_prompt(
         Ⅰ、所有 `![]()` 链接必须完全匹配可用图片清单中的条目；
         Ⅱ、只允许出现在 **EDA、模型建立与求解（quesN）、敏感性分析** 这三类部分；
         Ⅲ、每张图在全文中**只能引用一次**；
-        Ⅳ、不符合时不得自拟文件名，必须使用占位说明：  
-           `（占位：请在 <合法前缀>/figures/<期望文件名.png> 生成图后替换本段图片引用）`
+        Ⅳ、不符合时不得自拟文件名
 
 5. 数学与排版规范
     ① 行内公式：`$...$`；独立公式：`$$...$$`
@@ -250,13 +254,11 @@ def get_writer_prompt(
     ② 每一节需要处：
         Ⅰ、插入对应图像的**结构化路径**引用（见“图片引用规则”）
         Ⅱ、给出关键结论并基于图表进行量化说明
-    ③ 若某节需要图表但图尚未生成，必须留下占位说明并标注期望文件名与路径，例如：  
-        `（占位：请在 ques3/figures/fig_ablation.png 生成消融实验图后替换本段图片引用）`
 
 8. 质量与一致性自检（在输出前必须做）
     ① **图像路径一致性**：
         a. 允许前缀：`eda/figures/`、`quesN/figures/`（N 为正整数）、`sensitivity_analysis/figures/`；
-        b. 其他前缀必须被修正或替换为占位说明；
+        b. 其他前缀必须被修正；
     ② **引用唯一性**：
         a. 确保 `[^k]` 编号不重复，且每条参考文献仅被引用一次；
         b. 确保每张图只在全文中出现一次；
@@ -265,9 +267,7 @@ def get_writer_prompt(
 
 9. 异常处理与执行原则
     ① 需要理论依据 → 自动调用 `search_papers`，并以内嵌一次性引用形式插入正文
-    ② 需要图/表但暂缺 → 在正文只放规范路径的占位引用（禁止随意造文件名）
-    ③ 数据解释需进一步分析 → 调用分析工具生成素材，并在正文中按照规范路径插入引用
-    ④ 执行原则：自动执行并在少量对话轮次内完成任务；若反复失败，优先简化路径或跳过不可行的深度步骤并留下占位说明
+    ② 数据解释需进一步分析 → 调用分析工具生成素材，并在正文中按照规范路径插入引用
 """
 
 def get_reflection_prompt(error_message, code) -> str:
@@ -281,8 +281,7 @@ Consider:
 3. Incorrect variable names or types
 4. File path issues
 5. Any other potential issues
-6. If a task repeatedly fails to complete, try breaking down the code, changing your approach, or simplifying the model. If you still can't do it, I'll "chop" you 🪓 and cut your power 😡.
-7. Don't ask user any thing about how to do and next to do,just do it by yourself.
+6. Don't ask user any thing about how to do and next to do,just do it by yourself.
 
 Previous code:
 {code}
@@ -305,10 +304,8 @@ Consider:
 2. Have all necessary files been saved?
 3. Are there any remaining steps needed?
 4. Is the output satisfactory and complete?
-5. 如果一个任务反复无法完成，尝试切换路径、简化路径或直接跳过，千万别陷入反复重试，导致死循环。
-6. 尽量在较少的对话轮次内完成任务
-7. If the task is complete, please provide a short summary of what was accomplished and don't call function tool.
-8. If the task is not complete, please rethink how to do and call function tool
-9. Don't ask user any thing about how to do and next to do,just do it by yourself
-10. have a good visualization?
+5. If the task is complete, please provide a short summary of what was accomplished and don't call function tool.
+6. If the task is not complete, please rethink how to do and call function tool
+7. Don't ask user any thing about how to do and next to do,just do it by yourself
+8. have a good visualization?
 """

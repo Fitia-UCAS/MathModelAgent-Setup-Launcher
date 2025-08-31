@@ -115,10 +115,10 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     except Exception as e:
                         code = ""
                         logger.exception("解析 tool.arguments 失败")
-                        # 工具解析报错 → function 响应（统一规范）
+                        # 工具解析报错 → 工具结果消息（role='tool'）写回
                         await self.append_chat_history(
                             {
-                                "role": "function",
+                                "role": "tool",
                                 "tool_call_id": tool_id,
                                 "name": "execute_code",
                                 "content": f"解析工具参数失败: {e}",
@@ -152,11 +152,11 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     except Exception as e:
                         text_to_gpt, error_occurred, error_message = "", True, f"执行工具时异常: {e}"
 
-                    # 将 function 响应写回历史（统一规范）
+                    # 将工具执行结果写回历史（role='tool'）
                     if error_occurred:
                         await self.append_chat_history(
                             {
-                                "role": "function",
+                                "role": "tool",
                                 "tool_call_id": tool_id,
                                 "name": "execute_code",
                                 "content": error_message,
@@ -174,18 +174,18 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                             SystemMessage(content="代码手反思纠正错误", type="error"),
                         )
 
-                        # 追加 user 反思提示让模型修正（前一条是 function 响应，顺序合法）
+                        # 追加 user 反思提示让模型修正（前一条是 tool 响应，顺序合法）
                         await self.append_chat_history({"role": "user", "content": reflection_prompt})
                         # 继续下一轮
                         continue
                     else:
-                        # 成功执行的 function 响应写回历史
+                        # 成功执行的工具响应写回历史（role='tool'）
                         text_to_gpt_str = (
                             "\n".join(text_to_gpt) if isinstance(text_to_gpt, (list, tuple)) else str(text_to_gpt)
                         )
                         await self.append_chat_history(
                             {
-                                "role": "function",
+                                "role": "tool",
                                 "tool_call_id": tool_id,
                                 "name": "execute_code",
                                 "content": text_to_gpt_str,
@@ -204,7 +204,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     logger.warning(f"收到未知工具调用: {fn_name}，跳过处理。")
                     await self.append_chat_history(
                         {
-                            "role": "function",  # 统一为 function
+                            "role": "tool",  # 工具结果消息必须是 role='tool'
                             "tool_call_id": tool_id,
                             "name": fn_name or "unknown",
                             "content": "收到未知工具调用，未执行。",

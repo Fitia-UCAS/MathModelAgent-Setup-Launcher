@@ -1,4 +1,3 @@
-# interpreter_factory.py
 from typing import Literal
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.local_interpreter import LocalCodeInterpreter

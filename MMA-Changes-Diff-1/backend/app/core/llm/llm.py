@@ -23,12 +23,12 @@ from icecream import ic
 # ====== 全局：请求与重试配置（可按需调大/调小）======
 REQUEST_TIMEOUT = 300.0  # 单次请求整体超时（秒）
 HTTPX_TIMEOUTS = {
-    "connect": 300.0,
-    "read": 120.0,
-    "write": 60.0,
-    "pool": 120.0,
+    "connect": 120,
+    "read": 60,
+    "write": 120,
+    "pool": 60,
 }
-DEFAULT_MAX_RETRIES = 8
+DEFAULT_MAX_RETRIES = 100
 BACKOFF_BASE = 0.8  # 指数退避基数，实际 backoff = base * (2**attempt) + jitter
 
 # ====== 上下文长度保护（给 DeepSeek/GPT 等留余量）======
@@ -38,7 +38,8 @@ CONTEXT_TOKEN_HARD_LIMIT = 120_000
 litellm.callbacks = [agent_metrics]
 
 # ========= 最后一跳消息清洗（确保 messages 可被 OpenAI/DeepSeek 正确反序列化） =========
-_ALLOWED_KEYS = {"role", "content", "name", "tool_calls", "tool_call_id", "function_call"}
+# 仅保留顶层允许的字段：role/content/name/tool_calls/tool_call_id
+_ALLOWED_KEYS = {"role", "content", "name", "tool_calls", "tool_call_id"}
 
 
 def _json_dumps_safe(obj: Any) -> str:
@@ -141,43 +142,52 @@ def _stringify_tool_calls(tc_list: Any) -> Any:
 
 def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    最后一跳的强制清洗（顺序配对版本）：
-    1) 仅保留 OpenAI/DeepSeek 兼容字段
-    2) assistant.tool_calls：逐项兜底 id/type/function.name/arguments(str)，并把 id 入队
-    3) role=='tool'：content 一律转 str；若缺 tool_call_id，则从队列按序分配；分配失败的孤儿 tool 直接丢弃
-    4) 其它消息：content 一律转 str
+    最后一跳强制清洗（OpenAI/DeepSeek 兼容）：
+    1) 仅保留 _ALLOWED_KEYS 字段
+    2) 规范 assistant.tool_calls（字符串化 arguments / 补 id / type='function'）
+    3) 将任何遗留的 role=='function' 统一改为 role=='tool'（OpenAI 合法角色只有 system/user/assistant/tool）
+    4) tool 响应按出现顺序绑定最近一次未消费的 tool_call_id；无匹配 id 的“孤儿工具响应”直接丢弃
+    5) 丢弃纯空消息（system 允许为空；其它角色为空则去除），并清理 None 值
     """
     result: List[Dict[str, Any]] = []
+    if not history:
+        return result
 
-    # 队列：保存尚未被 tool 响应消化的 tool_call_id（按出现顺序）
-    pending_tool_ids: List[str] = []
+    pending_tool_ids: List[str] = []  # assistant.tool_calls 产生的待消费 id 队列
 
     for idx, orig in enumerate(history):
-        # 规整成 dict
         base = {} if not isinstance(orig, dict) else dict(orig)
-        # 只保留允许字段
+
+        # 先裁剪到允许字段（保留原 base 用于抽取文本）
         m = {k: v for k, v in base.items() if k in _ALLOWED_KEYS}
 
-        # role 兜底
-        role = m.get("role") or "assistant"
-        if role not in ("system", "user", "assistant", "tool"):
-            logger.warning(f"[sanitize] unexpected role={role}, fallback to 'assistant' at index={idx}")
+        # -------- 角色规范化 --------
+        role = m.get("role") or base.get("role") or "assistant"
+        # 统一支持的角色集合：system / user / assistant / tool
+        # 注：任何遗留的 "function" 都视为 "tool"
+        if role == "function":
+            role = "tool"
+            if not isinstance(m.get("name"), str) or not m.get("name"):
+                m["name"] = base.get("name") or "tool"
+        elif role == "tool":
+            # 合法，保持
+            pass
+        elif role not in ("system", "user", "assistant"):
+            logger.warning(f"[sanitize] unexpected role={role} at idx={idx}, fallback to 'assistant'")
             role = "assistant"
         m["role"] = role
 
-        # ================ assistant：处理 tool_calls ================
-        if role == "assistant" and "tool_calls" in base and base.get("tool_calls"):
-            # 先规范化 tool_calls
+        # -------- assistant.tool_calls 处理 --------
+        if role == "assistant" and base.get("tool_calls"):
             tool_calls = _stringify_tool_calls(base.get("tool_calls"))
             m["tool_calls"] = tool_calls
-
-            # 把 id 按顺序加入队列，供随后 tool 响应使用
+            # 建立待匹配 id 队列
             for tc in tool_calls or []:
                 tc_id = (tc or {}).get("id")
                 if isinstance(tc_id, str) and tc_id:
                     pending_tool_ids.append(tc_id)
 
-        # ================ content 清洗（所有角色） ================
+        # -------- content 规范化（所有角色）--------
         content = m.get("content", "")
         if content is None:
             content = ""
@@ -187,42 +197,55 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
             except Exception:
                 content = ""
 
-        # tool 额外尝试从其它字段提取文本
+        # 对“tool（含遗留 function）消息”尝试从其它字段提取可读文本
         if role == "tool" and (not content or not content.strip()):
-            extracted = _extract_tool_text(base if isinstance(base, dict) else {})
+            extracted = _extract_tool_text(base) if isinstance(base, dict) else ""
             content = extracted or ""
 
-        m["content"] = content
+        # 对“assistant 且包含 tool_calls”的消息，允许没有 content（多数模型就是空 content）
+        if not (role == "assistant" and m.get("tool_calls")):
+            # 其它角色一律写回 content
+            m["content"] = content
 
-        if role == "assistant" and m.get("tool_calls") and not (m.get("content") or "").strip():
-            m.pop("content", None)
-
-        # ================ tool：确保 tool_call_id ================
+        # -------- 为 tool 消息确保 tool_call_id 配对 --------
         if role == "tool":
-            tool_call_id = m.get("tool_call_id")
-            if not isinstance(tool_call_id, str) or not tool_call_id:
-                # 尝试按序分配一个待完成的 id
+            tcid = m.get("tool_call_id")
+            if not isinstance(tcid, str) or not tcid:
+                # 按顺序分配上一个 assistant.tool_calls 的 id
                 if pending_tool_ids:
                     assigned = pending_tool_ids.pop(0)
                     m["tool_call_id"] = assigned
-                    logger.debug(f"[sanitize] auto-assigned tool_call_id={assigned} at tool idx={idx}")
+                    logger.debug(f"[sanitize] tool msg auto-bound tool_call_id={assigned} at idx={idx}")
                 else:
-                    # 没有可用 id，说明是孤儿 tool 消息，直接丢弃，避免 400/Field required
+                    # 没有可匹配的 id，属于孤儿工具响应：直接丢弃，避免非法消息
                     logger.warning(f"[sanitize] dropping orphan tool message at idx={idx} (no matching tool_call_id)")
-                    continue  # 不加入 result
+                    continue
 
-        # 移除 None 值键，避免严格校验
+        # -------- 剔除 None 值，避免严格校验问题 --------
         for k in list(m.keys()):
             if m[k] is None:
                 del m[k]
 
-        # 记录（用 get 防止 content 被 pop 后 KeyError）
+        # -------- 丢弃纯空消息（除 system 外）--------
+        # - system 允许空（有时只作为指令容器）
+        # - user/assistant/tool 若全空且无 tool_calls/无 name/无 tool_call_id，直接丢弃
+        is_meaningless = (
+            (role != "system")
+            and (not m.get("content", "") or not m.get("content", "").strip())
+            and (not m.get("tool_calls"))
+            and (role != "tool" or not (m.get("name") or m.get("tool_call_id")))
+        )
+        if is_meaningless:
+            logger.debug(f"[sanitize] drop empty message at idx={idx}, role={role}")
+            continue
+
+        # 记录 debug
         if (m.get("content", "") or "") == "":
-            logger.debug(f"[sanitize] empty content at index={idx}, role={role}")
+            logger.debug(f"[sanitize] empty content kept at idx={idx}, role={role}")
 
         result.append(m)
 
-    # 调试：打印前几条，确认没有 None
+    # 调试：打印前几条，确认没有 None / 异常
     try:
         for i, mm in enumerate(result[:4]):
             logger.debug(
@@ -355,81 +378,96 @@ class LLM:
                 await asyncio.sleep(delay)
 
     def _validate_and_fix_tool_calls(self, history: list) -> list:
-        """验证并修复工具调用完整性"""
+        """
+        验证并修复工具调用完整性（OpenAI 新规范）：
+        1) 合法角色只允许：system / user / assistant / tool
+        2) assistant 消息里的 tool_calls[*].id 必须与后续某条 role='tool' 的消息的 tool_call_id 匹配
+        3) 若发现历史遗留的 role='function'，在此阶段就地改为 role='tool'
+        4) 未匹配到的“孤儿 tool 消息”丢弃；assistant 中未被消费的 tool_calls 也会被移除
+        """
         if not history:
             return history
 
         ic(f"🔍 开始验证工具调用，历史消息数量: {len(history)}")
 
-        # 查找所有未匹配的tool_calls
         fixed_history = []
         i = 0
+
+        def _is_tool_resp(m: dict) -> bool:
+            # 兼容历史：把 'function' 视为 'tool' 并在写入时改回 'tool'
+            return isinstance(m, dict) and m.get("role") in ("tool", "function")
 
         while i < len(history):
             msg = history[i]
 
-            # 如果是包含tool_calls的消息
-            if isinstance(msg, dict) and "tool_calls" in msg and msg["tool_calls"]:
+            # 1) assistant 带 tool_calls 的消息：逐一检查是否有后续响应（tool）
+            if isinstance(msg, dict) and msg.get("tool_calls"):
                 ic(f"📞 发现tool_calls消息在位置 {i}")
+                valid_tool_calls, invalid_tool_calls = [], []
 
-                # 检查每个tool_call是否都有对应的response，分别处理
-                valid_tool_calls = []
-                invalid_tool_calls = []
-
-                for tool_call in msg["tool_calls"]:
-                    tool_call_id = tool_call.get("id")
+                for tc in msg["tool_calls"]:
+                    tool_call_id = (tc or {}).get("id")
                     ic(f"  检查tool_call_id: {tool_call_id}")
+                    if not tool_call_id:
+                        invalid_tool_calls.append(tc)
+                        continue
 
-                    if tool_call_id:
-                        # 查找对应的tool响应
-                        found_response = False
-                        for j in range(i + 1, len(history)):
-                            if history[j].get("role") == "tool" and history[j].get("tool_call_id") == tool_call_id:
+                    found_response = False
+                    for j in range(i + 1, len(history)):
+                        m2 = history[j]
+                        if _is_tool_resp(m2):
+                            # 若是遗留 'function'，仅用于判断，稍后写回统一改 'tool'
+                            m2_id = m2.get("tool_call_id")
+                            if m2_id == tool_call_id:
                                 ic(f"  ✅ 找到匹配响应在位置 {j}")
                                 found_response = True
                                 break
 
-                        if found_response:
-                            valid_tool_calls.append(tool_call)
-                        else:
-                            ic(f"  ❌ 未找到匹配响应: {tool_call_id}")
-                            invalid_tool_calls.append(tool_call)
+                    if found_response:
+                        valid_tool_calls.append(tc)
+                    else:
+                        ic(f"  ❌ 未找到匹配响应: {tool_call_id}")
+                        invalid_tool_calls.append(tc)
 
-                # 根据检查结果处理消息
                 if valid_tool_calls:
-                    # 有有效的tool_calls，保留它们
                     fixed_msg = msg.copy()
                     fixed_msg["tool_calls"] = valid_tool_calls
                     fixed_history.append(fixed_msg)
                     ic(f"  🔧 保留 {len(valid_tool_calls)} 个有效tool_calls，移除 {len(invalid_tool_calls)} 个无效的")
                 else:
-                    # 没有有效的tool_calls，移除tool_calls但可能保留其他内容
+                    # 没有有效 tool_call：如果还有文本，就保留文本；否则丢弃整条
                     cleaned_msg = {k: v for k, v in msg.items() if k != "tool_calls"}
-                    if cleaned_msg.get("content"):
+                    content = (cleaned_msg.get("content") or "").strip()
+                    if content:
                         fixed_history.append(cleaned_msg)
                         ic(f"  🔧 移除所有tool_calls，保留消息内容")
                     else:
                         ic(f"  🗑️ 完全移除空的tool_calls消息")
 
-            # 如果是tool响应消息，检查是否是孤立的
-            elif isinstance(msg, dict) and msg.get("role") == "tool":
+            # 2) tool/function 响应：确认是否与上游 tool_calls 配对；无配对则丢弃
+            elif _is_tool_resp(msg):
+                role = msg.get("role")
                 tool_call_id = msg.get("tool_call_id")
-                ic(f"🔧 检查tool响应消息: {tool_call_id}")
+                ic(f"🔧 检查工具响应消息: role={role}, tool_call_id={tool_call_id}")
 
-                # 查找对应的tool_calls
+                # 在 fixed_history 中回溯查找是否存在匹配的 assistant.tool_calls
                 found_call = False
-                for j in range(len(fixed_history)):
-                    if fixed_history[j].get("tool_calls") and any(
-                        tc.get("id") == tool_call_id for tc in fixed_history[j]["tool_calls"]
-                    ):
-                        found_call = True
-                        break
+                for k in range(len(fixed_history) - 1, -1, -1):
+                    prev = fixed_history[k]
+                    if isinstance(prev, dict) and prev.get("tool_calls"):
+                        if any((tc or {}).get("id") == tool_call_id for tc in prev["tool_calls"]):
+                            found_call = True
+                            break
 
                 if found_call:
+                    # 统一将遗留的 'function' 改为 'tool'，与 OpenAI 规范一致
+                    if role == "function":
+                        msg = dict(msg)
+                        msg["role"] = "tool"
                     fixed_history.append(msg)
-                    ic(f"  ✅ 保留有效的tool响应")
+                    ic(f"  ✅ 保留有效的工具响应（role=tool）")
                 else:
-                    ic(f"  🗑️ 移除孤立的tool响应: {tool_call_id}")
+                    ic(f"  🗑️ 移除孤立的工具响应: {tool_call_id}")
 
             else:
                 # 普通消息，直接保留
@@ -443,6 +481,8 @@ class LLM:
             ic(f"✅ 验证通过，无需修复")
 
         return fixed_history
+
+
 
     def _truncate_history_by_tokens(self, history: list, token_limit: int) -> list:
         """
@@ -649,7 +689,7 @@ async def simple_chat(model: LLM, history: list) -> str:
         return sum(quick_count(m) for m in messages if isinstance(m, dict))
 
     def pair_safe_tail(messages):
-        MAX_TAIL_MSGS = 30
+        MAX_TAIL_MSGS = 100
         start = max(0, len(messages) - MAX_TAIL_MSGS)
         tail = messages[start:]
         return model._validate_and_fix_tool_calls(tail)
@@ -660,7 +700,7 @@ async def simple_chat(model: LLM, history: list) -> str:
             "content": (
                 "你是一个对话摘要器。请将以下对话压缩为一段简洁的中文总结，"
                 "保留任务目标、关键约束、重要结论和已完成步骤，去除无关细节。"
-                "输出不超过 300~500 字。"
+                "输出不超过 300~600 字。"
             ),
         }
         user_prompt = {
@@ -774,7 +814,7 @@ async def simple_chat(model: LLM, history: list) -> str:
 
     # 多轮仍超限：退而求其次 —— 仅保留 system + 极短摘要（仍为 user）
     try:
-        minimal_summary = await summarize_chunk(body[:50])
+        minimal_summary = await summarize_chunk(body[:100])
     except Exception:
         minimal_summary = "（超长上下文，已压缩为极短摘要。）"
 

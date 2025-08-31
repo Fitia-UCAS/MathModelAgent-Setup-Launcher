@@ -16,7 +16,3 @@ tools/*
 ques/*
 
 *.log
-
-__init__.py
-
-example/*

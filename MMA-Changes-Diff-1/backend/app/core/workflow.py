@@ -26,7 +26,7 @@ class WorkFlow:
 
 class MathModelWorkFlow(WorkFlow):
     task_id: str  #
-    work_dir: str  # worklow work dir
+    work_dir: str  # workflow work dir
     ques_count: int = 0  # 问题数量
     questions: dict[str, str | int] = {}  # 问题
 
@@ -41,7 +41,7 @@ class MathModelWorkFlow(WorkFlow):
 
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="识别用户意图和拆解问题ing..."),
+            SystemMessage(content="识别用户意图和拆解问题 ing..."),
         )
 
         try:
@@ -49,23 +49,34 @@ class MathModelWorkFlow(WorkFlow):
             self.questions = coordinator_response.questions
             self.ques_count = coordinator_response.ques_count
         except Exception as e:
-            #  非数学建模问题
             logger.error(f"CoordinatorAgent 执行失败: {e}")
-            raise e
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"识别/拆解失败：{e}", type="error"),
+            )
+            raise
 
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="识别用户意图和拆解问题完成,任务转交给建模手"),
+            SystemMessage(content="识别用户意图和拆解问题完成，任务转交给建模手"),
         )
 
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="建模手开始建模ing..."),
+            SystemMessage(content="建模手开始建模 ing..."),
         )
 
         modeler_agent = ModelerAgent(self.task_id, modeler_llm)
 
-        modeler_response = await modeler_agent.run(coordinator_response)
+        try:
+            modeler_response = await modeler_agent.run(coordinator_response)
+        except Exception as e:
+            logger.error(f"ModelerAgent 执行失败: {e}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"建模失败：{e}", type="error"),
+            )
+            raise
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
@@ -75,13 +86,20 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         notebook_serializer = NotebookSerializer(work_dir=self.work_dir)
-        code_interpreter = await create_interpreter(
-            kind="local",
-            task_id=self.task_id,
-            work_dir=self.work_dir,
-            notebook_serializer=notebook_serializer,
-            timeout=36000,
-        )
+        try:
+            code_interpreter = await create_interpreter(
+                kind="local",
+                task_id=self.task_id,
+                work_dir=self.work_dir,
+                notebook_serializer=notebook_serializer,
+                timeout=36000,
+            )
+        except Exception as e:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"创建沙盒失败：{e}", type="error"),
+            )
+            raise
 
         scholar = OpenAlexScholar(task_id=self.task_id, email=settings.OPENALEX_EMAIL)
 
@@ -114,74 +132,46 @@ class MathModelWorkFlow(WorkFlow):
 
         flows = Flows(self.questions)
 
-        ################################################ solution steps
+        # ============================ solution steps ============================
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
         config_template = get_config_template(problem.comp_template)
 
         for key, value in solution_flows.items():
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"代码手开始求解{key}"),
+                SystemMessage(content=f"代码手开始求解 {key}"),
             )
 
-            coder_response = await coder_agent.run(prompt=value["coder_prompt"], subtask_title=key)
+            try:
+                coder_response = await coder_agent.run(prompt=value["coder_prompt"], subtask_title=key)
+            except Exception as e:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"代码手求解 {key} 失败：{e}", type="error"),
+                )
+                raise
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"代码手求解成功{key}", type="success"),
+                SystemMessage(content=f"代码手求解成功 {key}", type="success"),
             )
 
+            # ✅ 这里使用 code_response（与你当前的 Pydantic 模型一致）
             writer_prompt = flows.get_writer_prompt(
-                key, coder_response.code_response, code_interpreter, config_template
+                key,
+                coder_response.code_response,   # 修正字段名
+                code_interpreter,
+                config_template,
             )
 
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"论文手开始写{key}部分"),
+                SystemMessage(content=f"论文手开始写 {key} 部分"),
             )
 
-            # 每次写作前，扫描该 task 的所有可用 PNG（相对路径：eda/..., quesN/..., sensitivity_analysis/...）
-            all_images = collect_png_paths_by_task(self.task_id)
+            # 扫描全部可用图片
+            all_images = collect_png_paths_by_task(self.task_id) or []
 
-            # 只允许对应部分的图片
-            if key == "eda":
-                available_images = [p for p in all_images if p.startswith("eda/figures/")]
-            elif key.startswith("ques"):
-                available_images = [p for p in all_images if p.startswith(f"{key}/figures/")]
-            elif key == "sensitivity_analysis":
-                available_images = [p for p in all_images if p.startswith("sensitivity_analysis/figures/")]
-            else:
-                available_images = []  # 其他部分不传图片
-
-            writer_response = await writer_agent.run(
-                writer_prompt,
-                available_images=available_images,
-                sub_title=key,
-            )
-
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"论文手完成{key}部分"),
-            )
-
-            user_output.set_res(key, writer_response)
-
-        # 关闭沙盒
-        await code_interpreter.cleanup()
-        logger.info(user_output.get_res())
-
-        ################################################ write steps
-        write_flows = flows.get_write_flows(user_output, config_template, problem.ques_all)
-        for key, value in write_flows.items():
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"论文手开始写{key}部分"),
-            )
-
-            # 再次扫描，保证拿到 solution 阶段生成的全部最新图片
-            all_images = collect_png_paths_by_task(self.task_id)
-
-            # write 阶段一般不引用图，如果需要可复用相同策略
             if key == "eda":
                 available_images = [p for p in all_images if p.startswith("eda/figures/")]
             elif key.startswith("ques"):
@@ -191,14 +181,65 @@ class MathModelWorkFlow(WorkFlow):
             else:
                 available_images = []
 
-            writer_response = await writer_agent.run(
-                prompt=value,
-                available_images=available_images,
-                sub_title=key,
+            try:
+                writer_response = await writer_agent.run(
+                    writer_prompt,
+                    available_images=available_images,
+                    sub_title=key,
+                )
+            except Exception as e:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"论文手写作 {key} 失败：{e}", type="error"),
+                )
+                raise
+
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"论文手完成 {key} 部分"),
             )
 
             user_output.set_res(key, writer_response)
 
-        logger.info(user_output.get_res())
+        # 关闭沙盒
+        try:
+            await code_interpreter.cleanup()
+        finally:
+            logger.info(user_output.get_res())
 
+        # ============================ write steps ============================
+        write_flows = flows.get_write_flows(user_output, config_template, problem.ques_all)
+        for key, value in write_flows.items():
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"论文手开始写 {key} 部分"),
+            )
+
+            all_images = collect_png_paths_by_task(self.task_id) or []
+
+            if key == "eda":
+                available_images = [p for p in all_images if p.startswith("eda/figures/")]
+            elif key.startswith("ques"):
+                available_images = [p for p in all_images if p.startswith(f"{key}/figures/")]
+            elif key == "sensitivity_analysis":
+                available_images = [p for p in all_images if p.startswith("sensitivity_analysis/figures/")]
+            else:
+                available_images = []
+
+            try:
+                writer_response = await writer_agent.run(
+                    prompt=value,
+                    available_images=available_images,
+                    sub_title=key,
+                )
+            except Exception as e:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"论文手写作 {key} 失败：{e}", type="error"),
+                )
+                raise
+
+            user_output.set_res(key, writer_response)
+
+        logger.info(user_output.get_res())
         user_output.save_result()

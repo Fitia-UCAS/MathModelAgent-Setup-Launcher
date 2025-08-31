@@ -2,7 +2,7 @@ from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import get_writer_prompt
 from app.schemas.enums import CompTemplate, FormatOutPut
-from app.tools.openalex_scholar import OpenAlexScholar
+from app.tools.openalex_scholar import OpenAlexScholar, paper_to_footnote_tuple
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage, WriterMessage
@@ -18,8 +18,8 @@ from typing import List, Tuple
 class WriterAgent(Agent):
     """
     写作手：
-    - 统一使用 OpenAI/DeepSeek 兼容的工具流：
-      assistant.tool_calls -> function 响应（role="function", name, tool_call_id, content）
+    - 统一使用 OpenAI 兼容的工具流：
+      assistant.tool_calls -> 工具结果消息（role="tool", tool_call_id, content）
     - 对工具返回进行体积限制，避免超长上下文
     - 图片引用校验与自动纠错迭代
     """
@@ -84,7 +84,8 @@ class WriterAgent(Agent):
             sub_title=sub_title,
         )
 
-        footnotes: List[str] = []
+        # 从源头即使用严格类型：List[Tuple[str, str]]
+        footnotes: List[Tuple[str, str]] = []
         assistant_msg_obj = response.choices[0].message
         assistant_content = getattr(assistant_msg_obj, "content", "") or ""
         assistant_tool_calls = getattr(assistant_msg_obj, "tool_calls", None)
@@ -99,7 +100,9 @@ class WriterAgent(Agent):
                     tc_id = getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else None)
                     fn = getattr(tc, "function", None) or (tc.get("function") if isinstance(tc, dict) else {}) or {}
                     fn_name = (
-                        getattr(fn, "name", None) or (fn.get("name") if isinstance(fn, dict) else None) or "unknown"
+                        getattr(fn, "name", None)
+                        or (fn.get("name") if isinstance(fn, dict) else None)
+                        or "unknown"
                     )
                     raw_args = getattr(fn, "arguments", None) or (fn.get("arguments") if isinstance(fn, dict) else None)
                     if isinstance(raw_args, (dict, list)):
@@ -110,7 +113,9 @@ class WriterAgent(Agent):
                         fn_args = str(raw_args)
                     if not isinstance(tc_id, str) or not tc_id:
                         tc_id = f"call_{uuid.uuid4().hex[:12]}"
-                    safe_tool_calls.append({"id": tc_id, "type": "function", "function": {"name": fn_name, "arguments": fn_args}})
+                    safe_tool_calls.append(
+                        {"id": tc_id, "type": "function", "function": {"name": fn_name, "arguments": fn_args}}
+                    )
             except Exception:
                 safe_tool_calls = None
 
@@ -154,32 +159,38 @@ class WriterAgent(Agent):
                     )
                     await self.append_chat_history(
                         {
-                            "role": "function",
+                            "role": "tool",
                             "name": "search_papers",
                             "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
                             "content": f"解析 search_papers 参数失败: {e}",
                         }
                     )
-                    return WriterResponse(response_content=f"解析 search_papers 参数失败: {e}", footnotes=footnotes)
+                    return WriterResponse(
+                        response_content=f"解析 search_papers 参数失败: {e}",
+                        footnotes=[],
+                    )
 
                 await redis_manager.publish_message(
                     self.task_id,
                     WriterMessage(input={"query": query}),
                 )
 
-                # ✅ scholar 为空兜底
+                # scholar 为空兜底
                 if self.scholar is None:
                     msg = "search_papers 工具不可用：scholar 实例为空。"
                     logger.error(msg)
                     await self.append_chat_history(
                         {
-                            "role": "function",
+                            "role": "tool",
                             "name": "search_papers",
                             "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
                             "content": msg,
                         }
                     )
-                    return WriterResponse(response_content=msg, footnotes=footnotes)
+                    return WriterResponse(
+                        response_content=msg,
+                        footnotes=[],
+                    )
 
                 # 调用 scholar 搜索文献
                 try:
@@ -189,20 +200,33 @@ class WriterAgent(Agent):
                     logger.error(error_msg)
                     await self.append_chat_history(
                         {
-                            "role": "function",
+                            "role": "tool",
                             "name": "search_papers",
                             "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
                             "content": error_msg,
                         }
                     )
-                    return WriterResponse(response_content=error_msg, footnotes=footnotes)
+                    return WriterResponse(
+                        response_content=error_msg,
+                        footnotes=[],
+                    )
 
-                # ✅ 体积限制：仅取前 N 篇 + 总字符上限
+                # 体积限制：仅取前 N 篇 + 总字符上限
                 TOP_N = 25
                 try:
                     top_papers = papers[:TOP_N] if isinstance(papers, list) else papers
                 except Exception:
                     top_papers = papers
+
+                # —— 源头生成脚注元组：(text, url)
+                try:
+                    if isinstance(top_papers, list):
+                        for p in top_papers[:5]:
+                            if isinstance(p, dict):
+                                text, url = paper_to_footnote_tuple(p)
+                                footnotes.append((text, url))
+                except Exception:
+                    pass
 
                 papers_str = self.scholar.papers_to_str(top_papers)
                 if not isinstance(papers_str, str):
@@ -217,22 +241,12 @@ class WriterAgent(Agent):
 
                 await self.append_chat_history(
                     {
-                        "role": "function",
+                        "role": "tool",
                         "name": "search_papers",
                         "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
                         "content": papers_str,
                     }
                 )
-
-                # footnotes（可选）
-                try:
-                    if isinstance(papers, list):
-                        for p in papers[:5]:
-                            title = getattr(p, "title", None) or (p.get("title") if isinstance(p, dict) else None)
-                            authors = getattr(p, "authors", None) or (p.get("authors") if isinstance(p, dict) else None)
-                            footnotes.append(f"{title} — {authors}")
-                except Exception:
-                    pass
 
                 # 继续对话
                 next_response = await self.model.chat(
@@ -253,7 +267,7 @@ class WriterAgent(Agent):
                 )
                 await self.append_chat_history(
                     {
-                        "role": "function",
+                        "role": "tool",
                         "name": fn_name or "unknown",
                         "tool_call_id": tool_id or f"call_{uuid.uuid4().hex[:12]}",
                         "content": "收到未知工具调用，未执行。请改用已注册的工具或直接继续写作。",
@@ -315,6 +329,7 @@ class WriterAgent(Agent):
             await self.append_chat_history({"role": "assistant", "content": fix_assistant})
             response_content = fix_assistant
 
+        # 源头即严格类型，无需再归一化
         return WriterResponse(response_content=response_content, footnotes=footnotes)
 
     # ============== 图片工具 ==============

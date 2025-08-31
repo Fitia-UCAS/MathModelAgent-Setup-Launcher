@@ -103,7 +103,7 @@ async def validate_api_key(request: ValidateApiKeyRequest):
         elif "403" in error_msg or "Forbidden" in error_msg:
             return ValidateApiKeyResponse(valid=False, message="✗ API 权限不足或账户余额不足")
         else:
-            return ValidateApiKeyResponse(valid=False, message=f"✗ 验证失败: {error_msg[:50]}...")
+            return ValidateApiKeyResponse(valid=False, message=f"✗ 验证失败: {error_msg[:200]}...")
 
 
 @router.post("/example")

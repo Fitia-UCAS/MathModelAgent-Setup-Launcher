@@ -97,7 +97,7 @@ class ModelerAgent(Agent):  # 继承自Agent类
             }
         )
 
-        # 配合 llm.py 的归一化，传类名字符串即可
+        # 调用模型（无需工具）
         response = await self.model.chat(
             history=self.chat_history,
             agent_name=self.__class__.__name__,

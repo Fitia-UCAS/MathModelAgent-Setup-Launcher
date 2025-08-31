@@ -83,8 +83,10 @@ class CoordinatorAgent(Agent):
             await self.append_chat_history({"role": "system", "content": self.system_prompt})
             self._inited = True
 
+        # 用户问题作为 user 消息
         await self.append_chat_history({"role": "user", "content": ques_all})
 
+        # 调用模型
         response = await self.model.chat(
             history=self.chat_history,
             agent_name=self.__class__.__name__,  # LLM 层会做统一 metadata 处理

@@ -26,7 +26,7 @@ class WorkFlow:
 
 class MathModelWorkFlow(WorkFlow):
     task_id: str  #
-    work_dir: str  # worklow work dir
+    work_dir: str  # workflow work dir
     ques_count: int = 0  # 问题数量
     questions: dict[str, str | int] = {}  # 问题
 
@@ -49,7 +49,6 @@ class MathModelWorkFlow(WorkFlow):
             self.questions = coordinator_response.questions
             self.ques_count = coordinator_response.ques_count
         except Exception as e:
-            # 非数学建模问题 / JSON 解析失败等
             logger.error(f"CoordinatorAgent 执行失败: {e}")
             await redis_manager.publish_message(
                 self.task_id,
@@ -157,11 +156,10 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"代码手求解成功 {key}", type="success"),
             )
 
-            # ✅ 修正字段名：CoderAgent.run 返回的是 CoderToWriter(coder_response=..., created_images=...)
-            # 之前写成 coder_response.code_response 会得到 None，导致 WriterPrompt 混入空值
+            # ✅ 这里使用 code_response（与你当前的 Pydantic 模型一致）
             writer_prompt = flows.get_writer_prompt(
                 key,
-                coder_response.coder_response,   # <-- 这里改为 coder_response.coder_response
+                coder_response.code_response,   # 修正字段名
                 code_interpreter,
                 config_template,
             )
@@ -171,10 +169,9 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"论文手开始写 {key} 部分"),
             )
 
-            # 每次写作前，扫描该 task 的所有可用 PNG（相对路径：eda/..., quesN/..., sensitivity_analysis/...）
+            # 扫描全部可用图片
             all_images = collect_png_paths_by_task(self.task_id) or []
 
-            # 只允许对应部分的图片
             if key == "eda":
                 available_images = [p for p in all_images if p.startswith("eda/figures/")]
             elif key.startswith("ques"):
@@ -182,7 +179,7 @@ class MathModelWorkFlow(WorkFlow):
             elif key == "sensitivity_analysis":
                 available_images = [p for p in all_images if p.startswith("sensitivity_analysis/figures/")]
             else:
-                available_images = []  # 其他部分不传图片
+                available_images = []
 
             try:
                 writer_response = await writer_agent.run(
@@ -218,7 +215,6 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"论文手开始写 {key} 部分"),
             )
 
-            # 再次扫描，保证拿到 solution 阶段生成的全部最新图片
             all_images = collect_png_paths_by_task(self.task_id) or []
 
             if key == "eda":

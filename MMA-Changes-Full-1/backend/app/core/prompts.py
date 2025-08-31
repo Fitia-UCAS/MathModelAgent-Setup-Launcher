@@ -143,6 +143,11 @@ CODER_PROMPT = f"""
         ├── datasets/
         ├── figures/
         └── reports/
+        ques6/
+        ├── ques6.py
+        ├── datasets/
+        ├── figures/
+        └── reports/
         sensitivity_analysis/
         ├── sensitivity_analysis.py
         ├── datasets/
