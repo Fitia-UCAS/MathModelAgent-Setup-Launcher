@@ -1,10 +1,12 @@
 # app/tools/png_paths.py
+
 import os
 from pathlib import Path
 from typing import List
 from app.utils.common_utils import get_work_dir  # 用它拿到 work_dir
 
 KEEP_FOLDERS = ["eda", "sensitivity_analysis"]
+
 
 def collect_png_relative_paths(startpath: str, only_figures: bool = True) -> List[str]:
     """
@@ -37,6 +39,7 @@ def collect_png_relative_paths(startpath: str, only_figures: bool = True) -> Lis
 
     # 排序去重
     return sorted(set(png_paths))
+
 
 def collect_png_paths_by_task(task_id: str, only_figures: bool = True) -> List[str]:
     """给定 task_id，扫描该任务 work_dir 下的 png 相对路径"""

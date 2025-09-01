@@ -1,9 +1,13 @@
-import re
+# app/core/llm/llm.py
+
 import json
+import codecs
+import string
 import asyncio
 import random
 import uuid
 from typing import Any, List, Dict
+
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
 from app.schemas.response import (
@@ -19,6 +23,10 @@ import litellm
 from app.schemas.enums import AgentType
 from app.utils.track import agent_metrics
 from icecream import ic
+
+# 引入集中式清洗/正则工具
+from app.tools.text_sanitizer import TextSanitizer as TS
+from app.tools.json_fixer import JsonFixer
 
 # ====== 全局：请求与重试配置（可按需调大/调小）======
 REQUEST_TIMEOUT = 300.0  # 单次请求整体超时（秒）
@@ -102,6 +110,13 @@ def _extract_tool_text(msg: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _looks_like_literal_escapes(s: str) -> bool:
+    """
+    委托给 TextSanitizer 的实现，保持行为一致。
+    """
+    return TS.looks_like_literal_escapes(s)
+
+
 def _stringify_tool_calls(tc_list: Any) -> Any:
     """把 assistant 消息里的 tool_calls.arguments 强制转成字符串，并兜底 function.name / type / id"""
     if not isinstance(tc_list, (list, tuple)):
@@ -142,12 +157,11 @@ def _stringify_tool_calls(tc_list: Any) -> Any:
 
 def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    最后一跳强制清洗（OpenAI/DeepSeek 兼容）：
-    1) 仅保留 _ALLOWED_KEYS 字段
-    2) 规范 assistant.tool_calls（字符串化 arguments / 补 id / type='function'）
-    3) 将任何遗留的 role=='function' 统一改为 role=='tool'（OpenAI 合法角色只有 system/user/assistant/tool）
-    4) tool 响应按出现顺序绑定最近一次未消费的 tool_call_id；无匹配 id 的“孤儿工具响应”直接丢弃
-    5) 丢弃纯空消息（system 允许为空；其它角色为空则去除），并清理 None 值
+    最后一跳强制清洗（OpenAI/DeepSeek 兼容）改良版：保留原有行为。
+    1) 不会无脑转义或移除换行
+    2) 如果 content 是 list-of-lines，保留并合并为真实换行
+    3) 若 content 为字符串且仅包含字面 '\\n'（没有真实 '\n'），则保守地尝试一次反转义为真实换行
+    4) 其它行为与原版一致：规范角色、处理 assistant.tool_calls、绑定 tool_call_id、丢弃孤儿消息等
     """
     result: List[Dict[str, Any]] = []
     if not history:
@@ -163,14 +177,11 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
 
         # -------- 角色规范化 --------
         role = m.get("role") or base.get("role") or "assistant"
-        # 统一支持的角色集合：system / user / assistant / tool
-        # 注：任何遗留的 "function" 都视为 "tool"
         if role == "function":
             role = "tool"
             if not isinstance(m.get("name"), str) or not m.get("name"):
                 m["name"] = base.get("name") or "tool"
         elif role == "tool":
-            # 合法，保持
             pass
         elif role not in ("system", "user", "assistant"):
             logger.warning(f"[sanitize] unexpected role={role} at idx={idx}, fallback to 'assistant'")
@@ -181,37 +192,84 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
         if role == "assistant" and base.get("tool_calls"):
             tool_calls = _stringify_tool_calls(base.get("tool_calls"))
             m["tool_calls"] = tool_calls
-            # 建立待匹配 id 队列
             for tc in tool_calls or []:
                 tc_id = (tc or {}).get("id")
                 if isinstance(tc_id, str) and tc_id:
                     pending_tool_ids.append(tc_id)
 
         # -------- content 规范化（所有角色）--------
-        content = m.get("content", "")
-        if content is None:
-            content = ""
-        if not isinstance(content, str):
-            try:
-                content = str(content)
-            except Exception:
-                content = ""
+        content = None
+        # Prefer explicit content from m (already filtered); fallback to base variety
+        if "content" in m:
+            content = m.get("content")
+        else:
+            # try to find likely textual fields in original object
+            if isinstance(base, dict):
+                # keep the same priority as _extract_tool_text but don't over-dumps strings
+                for k in ("content", "text", "result", "message", "msg"):
+                    if k in base and base.get(k) is not None:
+                        content = base.get(k)
+                        break
 
-        # 对“tool（含遗留 function）消息”尝试从其它字段提取可读文本
-        if role == "tool" and (not content or not content.strip()):
+        # Normalize content to a single string while preserving existing newlines:
+        normalized_content = ""
+        if content is None:
+            normalized_content = ""
+        elif isinstance(content, list):
+            # If already list-of-lines, join preserving explicit line breaks.
+            # Allow items to be either strings or objects (non-strings -> json dumps)
+            parts = []
+            for it in content:
+                if isinstance(it, str):
+                    parts.append(it)
+                else:
+                    parts.append(_json_dumps_safe(it))
+            normalized_content = "\n".join(parts)
+        elif isinstance(content, dict):
+            # dict -> json string (no ascii escape)
+            normalized_content = _json_dumps_safe(content)
+        else:
+            # it's a scalar (likely string or number)
+            try:
+                normalized_content = str(content)
+            except Exception:
+                normalized_content = ""
+
+        # 保守反转义：仅当内容看起来是“字面转义的 ASCII 文本”时再处理；
+        # 且对 tool 消息一律跳过（避免破坏代码/二进制）
+        if role != "tool" and _looks_like_literal_escapes(normalized_content):
+            try:
+                # 只做一次 unicode_escape 解码（不再先 .encode('utf-8')）
+                candidate = codecs.decode(normalized_content, "unicode_escape")
+                # 要求至少出现真实换行，避免把正常文本搞坏
+                if "\n" in candidate or "\r\n" in candidate or "\t" in candidate:
+                    normalized_content = candidate
+                else:
+                    normalized_content = (
+                        normalized_content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+                    )
+            except Exception:
+                normalized_content = (
+                    normalized_content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+                )
+
+        # Now we have normalized_content with real '\n' where appropriate. Do NOT strip or remove newlines.
+        # 对“tool（含遗留 function）消息”尝试从其它字段提取可读文本（仅在 content 为空时）
+        if role == "tool" and (not normalized_content or not normalized_content.strip()):
             extracted = _extract_tool_text(base) if isinstance(base, dict) else ""
-            content = extracted or ""
+            if extracted:
+                # _extract_tool_text returns joined parts with "\n" already
+                normalized_content = extracted
 
         # 对“assistant 且包含 tool_calls”的消息，允许没有 content（多数模型就是空 content）
         if not (role == "assistant" and m.get("tool_calls")):
             # 其它角色一律写回 content
-            m["content"] = content
+            m["content"] = normalized_content
 
         # -------- 为 tool 消息确保 tool_call_id 配对 --------
         if role == "tool":
             tcid = m.get("tool_call_id")
             if not isinstance(tcid, str) or not tcid:
-                # 按顺序分配上一个 assistant.tool_calls 的 id
                 if pending_tool_ids:
                     assigned = pending_tool_ids.pop(0)
                     m["tool_call_id"] = assigned
@@ -227,8 +285,6 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
                 del m[k]
 
         # -------- 丢弃纯空消息（除 system 外）--------
-        # - system 允许空（有时只作为指令容器）
-        # - user/assistant/tool 若全空且无 tool_calls/无 name/无 tool_call_id，直接丢弃
         is_meaningless = (
             (role != "system")
             and (not m.get("content", "") or not m.get("content", "").strip())
@@ -239,7 +295,7 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
             logger.debug(f"[sanitize] drop empty message at idx={idx}, role={role}")
             continue
 
-        # 记录 debug
+        # 记录 debug（保持原来的调试输出）
         if (m.get("content", "") or "") == "":
             logger.debug(f"[sanitize] empty content kept at idx={idx}, role={role}")
 
@@ -274,7 +330,7 @@ class LLM:
         self.model = model
         self.base_url = base_url
         self.chat_count = 0
-        self.max_tokens: int | None = None  # 添加最大token数限制（用于限制输出tokens）
+        self.max_tokens: int | None = None
         self.task_id = task_id
 
     async def chat(
@@ -287,24 +343,20 @@ class LLM:
         top_p: float | None = None,
         agent_name: AgentType | str = AgentType.SYSTEM,
         sub_title: str | None = None,
-    ) -> str:
+        publish: bool = True,  # 关键新增：是否发布到 Redis/WebSocket
+    ) -> object:  # 返回 ModelResponse
         logger.info(f"subtitle是:{sub_title}")
 
-        # 1) 验证 & 修复工具调用完整性
+        # 1) 工具配对修复 + 截断 + system后首条user
         if history:
             history = self._validate_and_fix_tool_calls(history)
-
-        # 2) 截断上下文（按 token 限制，保留系统消息 + 最近对话尾部）
-        if history:
             history = self._truncate_history_by_tokens(history, CONTEXT_TOKEN_HARD_LIMIT)
-
-        # 2.5) **关键新增**：强制保证 system 后紧跟 user
-        if history:
             history = self._ensure_first_after_system_user(history)
 
-        # 3) 最后一跳：消息清洗（强制保证 content 为字符串等）
+        # 2) 最后一跳清洗
         safe_messages = sanitize_messages_for_openai(history or [])
 
+        # 3) 组装请求参数
         kwargs = {
             "api_key": self.api_key,
             "model": self.model,
@@ -315,18 +367,16 @@ class LLM:
             "request_timeout": REQUEST_TIMEOUT,
             "client_args": {"timeout": HTTPX_TIMEOUTS},
         }
-
         if tools:
             kwargs["tools"] = tools
             if tool_choice is not None:
                 kwargs["tool_choice"] = tool_choice
-
         if self.max_tokens:
             kwargs["max_tokens"] = self.max_tokens
-
         if self.base_url:
             kwargs["base_url"] = self.base_url
 
+        # 4) 调用 + 重试
         for attempt in range(max_retries):
             try:
                 response = await acompletion(**kwargs)
@@ -335,26 +385,23 @@ class LLM:
                 if not response or not hasattr(response, "choices"):
                     raise ValueError("无效的API响应")
 
-                self.chat_count += 1
-                await self.send_message(response, agent_name, sub_title)
+                # 仅在 publish=True 时，才入库并广播
+                if publish:
+                    self.chat_count += 1
+                    await self.send_message(response, agent_name, sub_title)
+
                 return response
 
             except asyncio.CancelledError:
                 logger.warning("请求被上层取消（CancelledError），不重试。")
                 raise
-
-            except (
-                litellm.BadRequestError,
-                litellm.AuthenticationError,
-                litellm.NotFoundError,
-            ) as e:
+            except (litellm.BadRequestError, litellm.AuthenticationError, litellm.NotFoundError) as e:
                 msg = str(e)
                 if "maximum context length" in msg or "context length" in msg or "ContextWindowExceeded" in msg:
                     logger.error("非重试错误：上下文超限，请确保在进入 acompletion 前已充分截断。")
                 else:
                     logger.error(f"非重试错误：{e}")
                 raise
-
             except (
                 litellm.RateLimitError,
                 litellm.Timeout,
@@ -368,7 +415,6 @@ class LLM:
                     raise
                 delay = retry_delay * (2**attempt) + random.random() * 0.3
                 await asyncio.sleep(delay)
-
             except Exception as e:
                 logger.error(f"第 {attempt + 1}/{max_retries} 次重试（未知异常）: {e}")
                 if attempt >= max_retries - 1:
@@ -482,8 +528,6 @@ class LLM:
 
         return fixed_history
 
-
-
     def _truncate_history_by_tokens(self, history: list, token_limit: int) -> list:
         """
         按 token 数量裁剪 messages（保留首条 system + 尾部若干条）。
@@ -534,9 +578,9 @@ class LLM:
 
     async def send_message(self, response, agent_name, sub_title=None):
         logger.info(f"subtitle是:{sub_title}")
-        raw_content = response.choices[0].message.content or ""
+        raw_content = getattr(response.choices[0].message, "content", "") or ""
 
-        # 允许上游传字符串（如 "JsonFixerHeavy"），在此归一化为 AgentType
+        # 字符串 -> AgentType 的归一化（保持你现有逻辑）
         if isinstance(agent_name, str):
             key = agent_name.lower().replace(" ", "")
             mapping = {
@@ -559,66 +603,38 @@ class LLM:
                 )
             )
 
-        # ------- 仅对 Coordinator / Modeler 做 JSON 规范化（右侧面板要吃干净 JSON）-------
-        def _cleanup_fences(s: str) -> str:
-            return (s or "").replace("```json", "").replace("```", "").strip()
-
-        def _cleanup_ctrl(s: str) -> str:
-            return re.sub(r"[\x00-\x1F\x7F]", "", s or "")
-
-        def _extract_first_json_block(s: str) -> str:
-            if not s:
-                return ""
-            start = s.find("{")
-            if start == -1:
-                return ""
-            stack, in_str, esc = [], False, False
-            for i, ch in enumerate(s[start:], start):
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif ch == "\\":
-                        esc = True
-                    elif ch == '"':
-                        in_str = False
-                else:
-                    if ch == '"':
-                        in_str = True
-                    elif ch == "{":
-                        stack.append("{")
-                    elif ch == "}":
-                        if stack:
-                            stack.pop()
-                        if not stack:
-                            return s[start : i + 1]
-            return ""
-
-        def _normalize_json_for_right_panel(text: str):
-            # 返回 (ok, normalized_text)
-            cleaned = _cleanup_ctrl(_cleanup_fences(text))
-            blk = _extract_first_json_block(cleaned)
-            if not blk:
-                return False, text
-            try:
-                obj = json.loads(blk)
-                return True, json.dumps(obj, ensure_ascii=False)
-            except Exception:
-                return False, text
-
+        # ------- 对 Coordinator / Modeler 做严格 JSON 规范化（右侧面板要吃干净 JSON） -------
         content_to_send = raw_content
-        if agent_name in (AgentType.COORDINATOR, AgentType.MODELER):
-            ok, normalized = _normalize_json_for_right_panel(raw_content)
-            if ok:
-                content_to_send = normalized
-            else:
-                logger.warning("send_message: 未能从原文中提取合法 JSON，按原文发布。")
 
-        # ------- 构造并发布对应消息 -------
+        if agent_name in (AgentType.COORDINATOR, AgentType.MODELER):
+            stripped = TS.strip_fences_outer_or_all(raw_content)
+            try:
+                # 关键：把 llm=self 交给 JsonFixer，由它内部用 publish=False 调 self.chat
+                obj, stage = await JsonFixer.fix_and_parse(
+                    stripped,
+                    llm=self,
+                    agent_name=f"{getattr(agent_name, 'name', str(agent_name))}.JsonFixer",
+                )
+            except Exception as e:
+                logger.exception(f"JsonFixer 调用失败: {e}")
+                err_obj = {"error": "jsonfixer_exception", "exc": str(e)}
+                content_to_send = json.dumps(err_obj, ensure_ascii=False)
+            else:
+                if isinstance(obj, dict):
+                    # 成功：发布纯 JSON 字符串（仅一层序列化），不要再包 ```json 围栏
+                    content_to_send = json.dumps(obj, ensure_ascii=False)
+                else:
+                    # 解析失败：发布结构化错误对象（避免把脏原文再次传回引起循环）
+                    preview = (stripped[:600] + "…") if len(stripped) > 600 else stripped
+                    err_obj = {"error": "json_unparseable", "stage": stage, "raw_preview": preview}
+                    content_to_send = json.dumps(err_obj, ensure_ascii=False)
+                    logger.warning(f"send_message: JSON 解析失败 stage={stage}; 已发布错误对象供上游处理.")
+
+        # 发布给前端（保持原有分支）
         match agent_name:
             case AgentType.CODER:
                 agent_msg: CoderMessage = CoderMessage(content=content_to_send)
             case AgentType.WRITER:
-                # 处理 Markdown 图片/脚注
                 c, _ = split_footnotes(content_to_send)
                 c = transform_link(self.task_id, c)
                 agent_msg: WriterMessage = WriterMessage(content=c, sub_title=sub_title)
@@ -814,7 +830,7 @@ async def simple_chat(model: LLM, history: list) -> str:
 
     # 多轮仍超限：退而求其次 —— 仅保留 system + 极短摘要（仍为 user）
     try:
-        minimal_summary = await summarize_chunk(body[:100])
+        minimal_summary = await summarize_chunk(body[:200])
     except Exception:
         minimal_summary = "（超长上下文，已压缩为极短摘要。）"
 

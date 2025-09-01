@@ -1,3 +1,5 @@
+# app/core/agents/writer_agent.py
+
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import get_writer_prompt
@@ -14,14 +16,16 @@ from app.schemas.A2A import WriterResponse
 import re
 from typing import List, Tuple
 
+# 统一文本清洗（与 Coordinator/Modeler 保持一致思路）
+from app.tools.text_sanitizer import TextSanitizer as TS
+
 
 class WriterAgent(Agent):
     """
     写作手：
-    - 统一使用 OpenAI 兼容的工具流：
-      assistant.tool_calls -> 工具结果消息（role="tool", tool_call_id, content）
-    - 对工具返回进行体积限制，避免超长上下文
-    - 图片引用校验与自动纠错迭代
+    - 不暴露任何外部工具；只产出正文（Markdown）
+    - 统一做文本清洗（控制字符、常见瑕疵、外层围栏）
+    - 校验图片引用，仅允许来自“可用图片清单”，且每张只用一次
     """
 
     def __init__(
@@ -78,7 +82,7 @@ class WriterAgent(Agent):
         # 禁用工具暴露（不允许任何外部工具被调用）
         response = await self.model.chat(
             history=self.chat_history,
-            tools=[],          # 不暴露任何工具
+            tools=[],  # 不暴露任何工具
             tool_choice=None,  # 不允许选择工具
             agent_name=self.__class__.__name__,
             sub_title=sub_title,
@@ -86,8 +90,9 @@ class WriterAgent(Agent):
 
         # 从源头即使用严格类型：List[Tuple[str, str]]
         footnotes: List[Tuple[str, str]] = []
+
         assistant_msg_obj = response.choices[0].message
-        assistant_content = getattr(assistant_msg_obj, "content", "") or ""
+        assistant_content_raw = getattr(assistant_msg_obj, "content", "") or ""
         assistant_tool_calls = getattr(assistant_msg_obj, "tool_calls", None)
 
         # 若模型仍“幻想”生成了 tool_calls，记录并忽略，继续正文
@@ -97,21 +102,28 @@ class WriterAgent(Agent):
                 self.task_id,
                 SystemMessage(content="写作手收到工具调用，但已禁用所有外部工具，已忽略。", type="warning"),
             )
-            await self.append_chat_history({
-                "role": "tool",
-                "name": "disabled",
-                "tool_call_id": f"call_{uuid.uuid4().hex[:12]}",
-                "content": "所有外部工具已禁用，忽略此次调用。",
-            })
+            await self.append_chat_history(
+                {
+                    "role": "tool",
+                    "name": "disabled",
+                    "tool_call_id": f"call_{uuid.uuid4().hex[:12]}",
+                    "content": "所有外部工具已禁用，忽略此次调用。",
+                }
+            )
 
-        # 直接追加 assistant 内容
+        # 文本清洗（与其它 Agent 保持一致的三步：控制字符 → 常见瑕疵 → 外层围栏）
+        assistant_content = TS.clean_control_chars(assistant_content_raw, keep_whitespace=True)
+        assistant_content = TS.normalize_common_glitches(assistant_content)
+        assistant_content = TS.strip_fences_outer_or_all(assistant_content)
+
+        # 直接追加 assistant 内容（清洗后）
         await self.append_chat_history({"role": "assistant", "content": assistant_content})
 
-        # 最终文本
+        # 最终文本初始化
         response_content = assistant_content or ""
 
-        # 图片引用校验与纠错迭代
-        max_fix_attempts = 100
+        # 图片引用校验与纠错迭代（把上限调小，避免不必要的长循环）
+        max_fix_attempts = 5
         attempt = 0
         while attempt <= max_fix_attempts:
             img_paths = self._extract_image_paths(response_content)
@@ -134,12 +146,14 @@ class WriterAgent(Agent):
 
             error_msg = "\n".join(error_lines)
             logger.warning(f"图片引用校验未通过（尝试 {attempt}/{max_fix_attempts}）：\n{error_msg}")
-            await redis_manager.publish_message(self.task_id, SystemMessage(content=f"写作校验：图片引用问题，{error_msg}", type="error"))
+            await redis_manager.publish_message(
+                self.task_id, SystemMessage(content=f"写作校验：图片引用问题，{error_msg}", type="error")
+            )
 
             correction_prompt = (
                 "检测到图片引用不合规。请根据可用图片清单修正文章中的图片引用：\n"
                 "1. 只从下列可用图片中选择并使用（每张图片只能引用一次）：\n"
-                + "\n".join(self.available_images)
+                + "\n".join(self.available_images or [])
                 + "\n\n"
                 "2. 对于当前不在清单中的引用，请用占位格式替换：\n"
                 "   （占位：请在 <合法前缀>/figures/<期望文件名.png> 生成图后替换本段图片引用）\n"
@@ -151,18 +165,23 @@ class WriterAgent(Agent):
             # 纠错对话也禁用工具
             fix_resp = await self.model.chat(
                 history=self.chat_history,
-                tools=[],          # 不暴露任何工具
+                tools=[],  # 不暴露任何工具
                 tool_choice=None,  # 不允许选择工具
                 agent_name=self.__class__.__name__,
                 sub_title=sub_title,
             )
-            fix_assistant = getattr(fix_resp.choices[0].message, "content", "") or ""
+            fix_assistant_raw = getattr(fix_resp.choices[0].message, "content", "") or ""
+
+            # 对纠错返回也做同样的清洗，避免把控制字符/围栏再次带回上下文
+            fix_assistant = TS.clean_control_chars(fix_assistant_raw, keep_whitespace=True)
+            fix_assistant = TS.normalize_common_glitches(fix_assistant)
+            fix_assistant = TS.strip_fences_outer_or_all(fix_assistant)
+
             await self.append_chat_history({"role": "assistant", "content": fix_assistant})
             response_content = fix_assistant
 
         # 源头即严格类型，无需再归一化
         return WriterResponse(response_content=response_content, footnotes=footnotes)
-
 
     # ============== 图片工具 ==============
 
@@ -192,6 +211,7 @@ class WriterAgent(Agent):
                 invalids.append(p)
                 continue
             ok_prefix = False
+            # 显式允许常见两类路径；或 quesN/figures/
             if p.startswith("eda/figures/") or p.startswith("sensitivity_analysis/figures/"):
                 ok_prefix = True
             else:

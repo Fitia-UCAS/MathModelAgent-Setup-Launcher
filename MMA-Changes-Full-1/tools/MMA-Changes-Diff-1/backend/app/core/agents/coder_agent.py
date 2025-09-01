@@ -1,3 +1,5 @@
+# app/core/agents/coder_agent.py
+
 from app.core.agents.agent import Agent
 from app.config.setting import settings
 from app.utils.log_util import logger
@@ -9,69 +11,22 @@ from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT
 from app.utils.common_utils import get_current_files
 import json
-import re
 from app.core.prompts import get_reflection_prompt, get_completion_check_prompt
 from app.core.functions import coder_tools
 from icecream import ic
 
-
-def _strip_md_fences(s: str) -> str:
-    """去掉 ``` / ```json / ```python 这种 Markdown 代码栅栏。"""
-    s = s.strip()
-    if s.startswith("```"):
-        # 去头
-        s = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", s)
-        # 去尾
-        s = re.sub(r"\s*```$", "", s)
-    return s.strip()
+# 统一的文本/代码清洗器（集中管理正则等）
+from app.tools.text_sanitizer import TextSanitizer as TS
 
 
 def _safe_get_code_from_arguments(args_raw) -> str:
     """
     尽可能稳妥地从 tool.arguments 中拿到 code。
-    支持:
-      - dict: {"code": "..."}
-      - 纯 JSON 字符串
-      - 带 ```json / ```python 栅栏的 JSON/文本
-      - “\"code\": \"...\"” 宽松匹配
-      - “code: ...” 键值对风格
-      - 最后兜底：把原始字符串当作代码
+    现在全部委托给 TextSanitizer.extract_code_from_arguments，以保证提取逻辑集中并可维护。
     """
-    if args_raw is None:
-        return ""
-
-    # SDK 可能已经是 dict
-    if isinstance(args_raw, dict):
-        return args_raw.get("code", "") or ""
-
-    if not isinstance(args_raw, str):
-        return ""
-
-    s = _strip_md_fences(args_raw)
-
-    # 先尝试严格 JSON
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj.get("code", "") or ""
-    except Exception:
-        pass
-
-    # 宽松匹配 "code": "...."
-    m = re.search(r'"code"\s*:\s*"(.*)"\s*\}?$', s, flags=re.DOTALL)
-    if m:
-        return m.group(1)
-
-    # YAML/键值对风格：code: ....
-    m2 = re.search(r"(?im)^\s*code\s*:\s*(.+)\s*$", s, flags=re.DOTALL)
-    if m2:
-        return m2.group(1).strip()
-
-    # 兜底：把整个串当作代码
-    return s
+    return TS.extract_code_from_arguments(args_raw)
 
 
-# 代码手
 class CoderAgent(Agent):  # 同样继承自Agent类
     def __init__(
         self,
@@ -141,19 +96,51 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
             # 规范化 assistant 消息对象
             assistant_msg_obj = response.choices[0].message
-            assistant_content = getattr(assistant_msg_obj, "content", "") or ""
+            assistant_content_raw = getattr(assistant_msg_obj, "content", "") or ""
             assistant_tool_calls = getattr(assistant_msg_obj, "tool_calls", None)
+
+            # 对 assistant 文本做三步清洗：控制字符 → 常见瑕疵 → 外层围栏
+            assistant_content_clean = TS.clean_control_chars(assistant_content_raw, keep_whitespace=True)
+            assistant_content_clean = TS.normalize_common_glitches(assistant_content_clean)
+            assistant_content_clean = TS.strip_fences_outer_or_all(assistant_content_clean)
 
             # 有工具调用（常见路径）
             if assistant_tool_calls:
                 logger.info("检测到工具调用")
                 # 先把 assistant 内容规范化写入历史（append_chat_history 会把 tool_calls 规范化）
                 await self.append_chat_history(
-                    {"role": "assistant", "content": assistant_content, "tool_calls": assistant_tool_calls}
+                    {"role": "assistant", "content": assistant_content_clean, "tool_calls": assistant_tool_calls}
                 )
 
-                # 取第一个工具调用进行处理（当前仅支持 execute_code）
-                tool_call = assistant_tool_calls[0]
+                # 🔍 从 tool_calls 中优先寻找第一个 execute_code 调用（更稳妥）
+                tool_call = None
+                for tc in assistant_tool_calls:
+                    try:
+                        fn = getattr(tc.function, "name", None)
+                        if fn == "execute_code":
+                            tool_call = tc
+                            break
+                    except Exception:
+                        continue
+
+                if tool_call is None:
+                    # 未发现 execute_code，按未知工具处理
+                    first_tc = assistant_tool_calls[0]
+                    tool_id = getattr(first_tc, "id", None)
+                    fn_name = getattr(first_tc.function, "name", None)
+                    logger.warning(f"未发现 execute_code 调用（收到 {len(assistant_tool_calls)} 个工具），跳过处理。")
+                    await self.append_chat_history(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": fn_name or "unknown",
+                            "content": "未检测到可执行的 execute_code 调用，未执行。",
+                        }
+                    )
+                    retry_count += 1
+                    continue
+
+                # ========= execute_code 路径 =========
                 tool_id = getattr(tool_call, "id", None)
                 fn_name = getattr(tool_call.function, "name", None)
 
@@ -167,11 +154,11 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                     # 解析代码参数（稳健版）
                     try:
-                        code = _safe_get_code_from_arguments(getattr(tool_call.function, "arguments", None))
-                        if not isinstance(code, str):
-                            code = str(code or "")
+                        raw_code = _safe_get_code_from_arguments(getattr(tool_call.function, "arguments", None))
+                        if not isinstance(raw_code, str):
+                            raw_code = str(raw_code or "")
                     except Exception as e:
-                        code = ""
+                        raw_code = ""
                         logger.exception("解析 tool.arguments 失败")
                         # 工具解析报错 → 工具结果消息（role='tool'）写回
                         await self.append_chat_history(
@@ -186,21 +173,38 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         last_error_message = f"解析工具参数失败: {e}"
                         continue
 
-                    # 如果 code 为空，跳过工具调用
-                    if not code:
+                    # 兜底：若 code 为空，跳过工具调用
+                    if not raw_code.strip():
                         logger.warning("代码为空，跳过工具调用")
-                        # 可以发送系统消息通知
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(content="任务跳过：代码为空，未执行工具调用", type="warning"),
                         )
-                        continue  # 跳过当前循环，进入下一轮
+                        # 引导模型提供实际代码
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "你提供的 execute_code.arguments 里没有有效的代码，请重新调用 execute_code 并给出可运行的 Python 代码。"
+                                ),
+                            }
+                        )
+                        retry_count += 1
+                        continue
 
+                    # ====== 下发给执行器前统一修复/规范化代码 ======
+                    try:
+                        # 使用 TextSanitizer 的 normalize_for_execution（集中管理）
+                        code = TS.normalize_for_execution(raw_code, language="python")
+                    except Exception as e:
+                        # 若修复器出错，则退回到原始代码（保守策略），并记录日志
+                        logger.exception(f"代码修复器失败，使用原始代码继续执行: {e}")
+                        code = raw_code
+
+                    # 将修复后的代码先发布为 InterpreterMessage（便于前端查看将要执行的代码）
                     await redis_manager.publish_message(
                         self.task_id,
-                        InterpreterMessage(
-                            input={"code": code},
-                        ),
+                        InterpreterMessage(input={"code": code}),
                     )
 
                     # 执行工具调用（实际运行代码）
@@ -257,8 +261,9 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                         # 进入下一轮，由模型决定是否继续调用工具或直接总结结束
                         continue
+
                 else:
-                    # 未知工具，写日志并尝试继续（或可扩展支持更多工具）
+                    # 理论上不会到这里（上面已筛过 execute_code），留做防御
                     logger.warning(f"收到未知工具调用: {fn_name}，跳过处理。")
                     await self.append_chat_history(
                         {
@@ -275,8 +280,8 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                 # 没有 tool_calls 的 assistant 响应 —— 不要马上判定完成
                 logger.info("收到 assistant 没有 tool_calls 的响应，进入完成性判定逻辑")
 
-                # 先把 assistant 内容规范化写入历史
-                await self.append_chat_history({"role": "assistant", "content": assistant_content})
+                # 先把 assistant 内容（清洗后）写入历史
+                await self.append_chat_history({"role": "assistant", "content": assistant_content_clean})
 
                 # 如果从未执行过任何 execute_code，则强制要求模型先执行代码
                 if not executed_tool_calls:
@@ -291,7 +296,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                     run_code_request = (
                         "注意：你此前仅以文字说明了计划，但没有实际执行任何代码。"
-                        " 现在请立刻调用 `execute_code` 工具并提供要执行的 Python 代码（确保生成本子任务需要的文件/图像/报告），"
+                        "现在请立刻调用 `execute_code` 工具并提供要执行的 Python 代码（确保生成本子任务需要的文件/图像/报告），"
                         "不要直接总结为“任务完成”，必须先运行并在工具响应中返回执行结果。"
                     )
 
@@ -314,7 +319,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     # 已至少执行过一次工具，而这次 assistant 没有发起工具调用，可视为模型在做总结
                     logger.info("已执行过工具，本次 assistant 无 tool_calls，被视为任务完成")
                     return CoderToWriter(
-                        coder_response=assistant_content,
+                        coder_response=assistant_content_clean,
                         created_images=await self.code_interpreter.get_created_images(subtask_title),
                     )
 

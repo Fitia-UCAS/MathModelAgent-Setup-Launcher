@@ -1,3 +1,5 @@
+# app/core/functions.py
+
 coder_tools = [
     {
         "type": "function",
@@ -14,9 +16,7 @@ coder_tools = [
             "strict": True,
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "The code text"}
-                },
+                "properties": {"code": {"type": "string", "description": "The code text"}},
                 "required": ["code"],
                 "additionalProperties": False,
             },

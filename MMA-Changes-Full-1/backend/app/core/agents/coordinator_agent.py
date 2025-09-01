@@ -1,3 +1,5 @@
+# app/core/agents/coordinator_agent.py
+
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import COORDINATOR_PROMPT
@@ -6,64 +8,11 @@ import re
 from app.utils.log_util import logger
 from app.schemas.A2A import CoordinatorToModeler
 
+# 统一的文本清洗工具
+from app.tools.text_sanitizer import TextSanitizer as TS
 
-def _cleanup_control_chars(s: str) -> str:
-    """去除会导致 json.loads 失败的控制字符"""
-    return re.sub(r"[\x00-\x1F\x7F]", "", s or "")
-
-
-def _strip_fences(s: str) -> str:
-    """去掉常见代码栅栏"""
-    s = s or ""
-    return s.replace("```json", "").replace("```", "").strip()
-
-
-def _extract_first_json_block(s: str) -> str:
-    """
-    用栈法提取首个 {...} JSON 块，比正则 {.*} 更稳健。
-    - 支持跳过字符串中的花括号
-    - 找不到时返回去栅栏后的原文（让后续报错更可读）
-    """
-    if not s:
-        return ""
-    s = _strip_fences(s)
-    start = s.find("{")
-    if start == -1:
-        return s.strip()
-    stack = []
-    in_str = False
-    esc = False
-    for i, ch in enumerate(s[start:], start):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                stack.append("{")
-            elif ch == "}":
-                if stack:
-                    stack.pop()
-                if not stack:
-                    return s[start : i + 1].strip()
-    # 如果栈没清空，返回原文（让上层抛 JSONDecodeError）
-    return s.strip()
-
-
-def _normalize_common_glitches(s: str) -> str:
-    """
-    规范常见“小毛病”：
-    1) "qu es2" -> "ques2"
-    2) 去栅栏
-    """
-    s = _strip_fences(s)
-    s = re.sub(r'"qu\s+es(\d+)"', r'"ques\1"', s)  # "qu es2" -> "ques2"
-    return s.strip()
+# 通用 JSON 提取/修复/解析工具
+from app.tools.json_fixer import JsonFixer
 
 
 class CoordinatorAgent(Agent):
@@ -77,7 +26,14 @@ class CoordinatorAgent(Agent):
         self.system_prompt = COORDINATOR_PROMPT
 
     async def run(self, ques_all: str) -> CoordinatorToModeler:
-        """用户输入问题 使用LLM 格式化 questions"""
+        """
+        将用户原始问题经 LLM 结构化为 questions(JSON)：
+        1) 调用 LLM 生成结构化回答
+        2) 使用 JsonFixer：提取 + 修复非法转义/围栏/坏 JSON + 解析
+           - 内置本地兜底与（可选）一次 LLM 重建修复
+        3) 校验字段并推断 ques_count
+        4) 返回 CoordinatorToModeler
+        """
         # 只注入一次 system，避免重复堆叠
         if not self._inited:
             await self.append_chat_history({"role": "system", "content": self.system_prompt})
@@ -93,35 +49,37 @@ class CoordinatorAgent(Agent):
         )
         raw_text = getattr(response.choices[0].message, "content", "") or ""
 
-        # 1) 基础清理
-        raw_text = _cleanup_control_chars(raw_text)
+        # 基础清理（尽量不破坏可读性；后续 JsonFixer 内部还有一轮清洗与抽取）
+        prepared_text = TS.clean_control_chars(raw_text, keep_whitespace=True)
+        prepared_text = TS.normalize_common_glitches(prepared_text)
 
-        # 2) 提取 JSON 主体（栈法）
-        json_text = _extract_first_json_block(raw_text)
+        # 统一走 JsonFixer：一步完成 提取→修复→解析（含一次 LLM 重建与本地兜底）
+        questions, stage = await JsonFixer.fix_and_parse(
+            raw=prepared_text,
+            llm=self.model,  # 若不希望二次调用 LLM 进行“重建修复”，可改为 llm=None
+            agent_name="CoordinatorAgent.JsonFixer",
+        )
+        logger.info(f"[CoordinatorAgent] JsonFixer stage: {stage}")
 
-        # 3) 规范常见问题
-        json_text = _normalize_common_glitches(json_text)
+        if questions is None:
+            # 记录原始文本，便于排查
+            logger.error(f"[CoordinatorAgent] 无法解析为 JSON。raw_text preview: {raw_text[:500]}")
+            raise ValueError(f"JSON 解析错误（{stage}）")
 
-        if not json_text:
-            raise ValueError("返回的 JSON 字符串为空，请检查模型输出或上游提示。")
+        if not isinstance(questions, dict):
+            raise ValueError("解析结果不是 JSON 对象（dict）。")
 
-        # 4) 解析为对象
-        try:
-            questions = json.loads(json_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON 解析错误，原始字符串: {json_text}")
-            raise ValueError(f"JSON 解析错误: {e}") from e
-
-        # 5) 兜底：确保 ques_count 存在且为 int
+        # 兜底：确保 ques_count 存在且为 int
         ques_count = questions.get("ques_count")
         if not isinstance(ques_count, int):
+            # 自动推断 quesN 键数量
             ques_keys = [k for k in questions.keys() if re.fullmatch(r"ques\d+", k)]
             if not ques_keys:
                 raise ValueError("缺少 ques_count 且未找到任何 quesN 键。")
             ques_count = max(int(k[4:]) for k in ques_keys)
             questions["ques_count"] = ques_count
 
-        logger.info(f"questions:{questions}")
+        logger.info(f"[CoordinatorAgent] questions: {json.dumps(questions, ensure_ascii=False)[:800]}")
 
-        # 6) 返回给后续的 ModelerAgent
+        # 返回给后续的 ModelerAgent
         return CoordinatorToModeler(questions=questions, ques_count=ques_count)

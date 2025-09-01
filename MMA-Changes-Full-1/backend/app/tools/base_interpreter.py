@@ -1,5 +1,8 @@
+# app/tools/base_interpreter.py
+
 import abc
 import re
+import json
 from app.tools.notebook_serializer import NotebookSerializer
 from app.services.redis_manager import redis_manager
 from app.utils.log_util import logger
@@ -53,7 +56,6 @@ class BaseCodeInterpreter(abc.ABC):
         agent_msg = InterpreterMessage(
             output=content_to_display,
         )
-        logger.debug(f"发送消息: {agent_msg.model_dump_json()}")
         await redis_manager.publish_message(
             self.task_id,
             agent_msg,

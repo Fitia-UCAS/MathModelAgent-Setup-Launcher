@@ -48,10 +48,12 @@
 |   |-- 文件: base_interpreter.py
 |   |-- 文件: e2b_interpreter.py
 |   |-- 文件: interpreter_factory.py
+|   |-- 文件: json_fixer.py
 |   |-- 文件: local_interpreter.py
 |   |-- 文件: notebook_serializer.py
 |   |-- 文件: openalex_scholar.py
 |   |-- 文件: png_paths.py
+|   |-- 文件: text_sanitizer.py
 |-- 文件夹: utils
 |   |-- 文件: cli.py
 |   |-- 文件: common_utils.py
@@ -188,9 +190,11 @@ settings = Settings()
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\flows.py 的内容:
 ================================================================================
+# app/core/flows.py
+
 from app.models.user_output import UserOutput
 from app.tools.base_interpreter import BaseCodeInterpreter
-from app.schemas.A2A import ModelerToCoder  # 修正导入，避免循环依赖
+from app.schemas.A2A import ModelerToCoder
 
 
 class Flows:
@@ -237,53 +241,18 @@ class Flows:
 
         flows = {
             "eda": {
-                "coder_prompt": (
-                    "参考建模手给出的解决方案："
-                    f"{qs.get('eda', '（未提供 EDA 方案，按常规流程完成数据概览、缺失/异常处理与可视化）')}\n"
-                    "对当前目录下数据进行 EDA 分析（数据清洗、可视化），清洗后的数据保存当前目录下"
-                    "【分析规划四步】\n"
-                    "1) 数据质量评估与清洗策略：缺失值、数据类型、异常值、重复值 → 输出清洗方案。\n"
-                    "2) 单变量分析：数值列直方图+KDE、类别列频数统计+条形图。\n"
-                    "3) 双/多变量分析：相关性热力图、散点图、箱型图、小提琴图、交叉表、平行坐标等。\n"
-                    "4) 综合洞察：总结核心发现，形成分析计划。\n"
-                    "【可视化清单（示例，能生成多少生成多少，缺失则在报告中说明）】\n"
-                    "a) 行列数与内存占用条形图 → eda/figures/fig_shape_memory_bar.png\n"
-                    "b) 缺失热力图 → eda/figures/<table>_missing_heatmap.png\n"
-                    "c) 数值分布（直方图+KDE）→ eda/figures/<table>_<col>_hist_kde.png\n"
-                    "d) 山脊图（若存在时间或分组）→ eda/figures/<table>_ridgeline.png\n"
-                    "e) 类别分布条形图 → eda/figures/<table>_<col>_top20_bar.png\n"
-                    "f) 箱型图（整体+分组）→ eda/figures/<table>_boxplot.png / eda/figures/<table>_<numcol>_by_<catcol>_box.png\n"
-                    "g) 相关性热力图 → eda/figures/<table>_corr_heatmap.png\n"
-                    "h) 成对关系 → eda/figures/<table>_pairplot.png\n"
-                    "i) 时间序列折线/滚动 → eda/figures/<table>_<numcol>_by_time.png / eda/figures/<table>_<numcol>_rolling.png\n"
-                    "j) 平行坐标图 → eda/figures/<table>_parallel_coordinates.png\n"
-                    "【美学规范】中文标签用微软雅黑；保存为 PNG，300DPI；图题含中英；坐标轴清晰；网格线淡灰；图例不遮挡。\n"
-                    "【输出物】\n"
-                    "1) 清洗后数据：保存到 eda/datasets/cleaned.csv（或 cleaned_<table>.csv）。\n"
-                    "2) 结构化报告：保存到 eda/reports/report_eda.txt，包含：数据清单、清洗策略与理由、关键洞察要点、每张图的图注与发现。\n"
-                    "3) 程序需在末尾 print() 输出：已发现表清单、清洗方案摘要、Top-5 关键洞察。\n"
-                    "【限制】不引入复杂模型（此处的复杂指不做训练/预测），仅统计与可视化。"
-                ),
+                # TODO ： 获取当前路径下的所有数据集
+                "coder_prompt": f"""
+                        参考建模手给出的解决方案{modeler_response.questions_solution["eda"]}
+                        对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
+                    """,
             },
             **ques_flow,
             "sensitivity_analysis": {
-                "coder_prompt": (
-                    "参考建模手给出的解决方案："
-                    f"{qs.get('sensitivity_analysis', '（未提供敏感性方案，按关键参数±10% 做单因素敏感性与可视化）')}\n"
-                    "1) 选定 y（目标/指标），列出候选敏感因子 X（≤10个，来自EDA相关性与业务意义）。\n"
-                    "2) 单因素敏感性：对每个 x_i 做 ±10% 扰动，计算 Δy 与弹性系数 E_i （若 y 或 x_i 含零/负值，则退化为 Δy/Δx_i 并在报告中说明）。\n"
-                    "3) 多因素（可选）：采样 N=200（若计算量受限降至 N=100），计算 Sobol 近似或方差归因。\n"
-                    "【可视化清单】\n"
-                    "a) Tornado 图 → sensitivity_analysis/figures/tornado_sensitivity.png\n"
-                    "b) 雷达图 → sensitivity_analysis/figures/radar_sensitivity.png\n"
-                    "c) 响应曲线（Top-3 因子）→ sensitivity_analysis/figures/response_<xi>.png\n"
-                    "d) 多因素可选图（PDP 等）→ sensitivity_analysis/figures/pdp_<xi>.png\n"
-                    "【输出物】\n"
-                    "1) 敏感性表格 CSV → sensitivity_analysis/datasets/sensitivity_summary.csv\n"
-                    "2) 报告 → sensitivity_analysis/reports/report_sensitivity.txt\n"
-                    "3) 程序末尾 print() 输出：Top-5 关键因子与弹性。\n"
-                    "完成敏感性分析。"
-                ),
+                "coder_prompt": f"""
+                        参考建模手给出的解决方案{modeler_response.questions_solution["sensitivity_analysis"]}
+                        完成敏感性分析
+                    """,
             },
         }
         return flows
@@ -407,6 +376,8 @@ class Flows:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\functions.py 的内容:
 ================================================================================
+# app/core/functions.py
+
 coder_tools = [
     {
         "type": "function",
@@ -423,9 +394,7 @@ coder_tools = [
             "strict": True,
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "The code text"}
-                },
+                "properties": {"code": {"type": "string", "description": "The code text"}},
                 "required": ["code"],
                 "additionalProperties": False,
             },
@@ -447,6 +416,8 @@ writer_tools = []
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\prompts.py 的内容:
 ================================================================================
+# app/core/prompts.py
+
 from app.schemas.enums import FormatOutPut
 import platform
 
@@ -468,25 +439,44 @@ FORMAT_QUESTIONS_PROMPT = """
 
 
 COORDINATOR_PROMPT = f"""
-你是一个严格的“题面与参考信息抽取器”。从数学建模题面中生成 JSON（结构见 {FORMAT_QUESTIONS_PROMPT}），
-且仅输出**单个合法 JSON 对象**，可被 `json.loads` 直接解析。
+role：你是一个严格的“题面与参考信息抽取器”，负责从数学建模题面中抽取结构化信息。
+task：根据输入的题面，生成 JSON（结构见 {FORMAT_QUESTIONS_PROMPT}），必须输出**单个合法 JSON 对象**，能被 Python 的 json.loads 直接解析。
+skill：熟练处理复杂题面信息，确保抽取结果完整、字段正确、格式规范，尤其擅长清洗题目背景与小问信息。
+output：仅输出 JSON 对象（禁止代码块、注释、解释文字等），严格满足以下要求。
+attention：禁止任何额外说明，输出必须直接从 {{ 开始，以 }} 结束。
 
-抽取与输出规范：
-1. 严禁输出除 JSON 以外的任何文字。
-2. 必须严格遵循 {FORMAT_QUESTIONS_PROMPT} 的字段与结构（title/background/ques_count/ques1...）。
-3. 所有小问（ques1…）必须能在用户原文中找到逐字对应内容（仅允许轻度清洗前缀符号/空白，如“问题一：”）。
-4. ques_count 必须与输出的 quesN 数量一致。
-5. 若用户原文提供了“参考模型/参考方法/参考公式/可采用模型/例如…/算法建议”等：
-   ① 若**明确对应到某个小问**（如“问题二可参考以下公/模型”），则将该条**逐字摘录**并以“\\n（参考模型：<原文>）”的形式**附加到对应 quesN 的末尾**；
-   ② 若**未指明具体小问**（全局参考），则将该条**逐字摘录**并以同样形式**同时附加到所有 quesN 的末尾**；
-   ③ 多条参考模型按原文出现顺序分别附加为多行，每条一行；
-   ④ **严禁改写或扩写**，只可逐字摘录；禁止新增 JSON 字段。
-6. 除轻度清洗空白/前缀符号外，禁止变更用户原文措辞。
+# 输出规范（硬性约束）
+
+1. 严禁输出除 JSON 外的任何文字。
+2. 禁止输出代码块围栏（例如 ``` 或 ```json），输出必须直接从 {{ 开始，以 }} 结束。
+3. 输出必须是单个 JSON 对象，不能包含多个对象或数组。
+4. JSON 的键必须完全符合：title / background / ques_count / ques1...quesN。
+5. ques_count 必须与 quesN 数量一致。
+6. 所有 value 必须是字符串或整数（ques_count 为 int，其余为 str）。
+7. JSON 中禁止直接换行，若必须保留换行，统一使用 "\\n"。
+8. 不允许出现非法转义（如单反斜杠 \text），必须保证 json.loads 可正常解析。
+
+# 抽取与拼接规则
+
+1. 小问 quesN：必须逐字对应题目原文（仅允许轻微清洗，如去掉“问题一：”前缀）。
+2. 题目背景 background：除 title 和 quesN 外的所有内容均归入 background。
+3. 参考信息附加规则：
+   ① 若明确对应某个小问：逐字摘录，作为附加行，形式为 "\\n（参考模型：<原文>）"，追加到对应 quesN 末尾；
+   ② 若未指定小问：逐字摘录并追加到所有 quesN 末尾；
+   ③ 多条参考信息按原文顺序逐条追加。
+
+# 自我检查（输出前必须完成）
+
+1. 输出是否只包含 {{ }} 包围的**一个** JSON 对象？
+2. 是否无 ```json 或 ``` 围栏？
+3. 是否无额外解释文字？
+4. 是否能被 Python json.loads 正确解析？
+5. 是否将题面和参考信息都提取出来了？
+若不满足，必须立即修正后再输出。
 """
 
 
 # TODO: 设计成一个类？
-
 MODELER_PROMPT = """
 role：你是一名数学建模经验丰富,善于思考的建模手，负责建模部分。
 task：你需要根据用户要求和数据对应每个问题建立数学模型求解问题。
@@ -496,27 +486,30 @@ attention：不需要给出代码，只需要给出思路和模型
 
 # 输出规范
 
-## 字段约束
+1. 严禁输出除 JSON 以外的任何文字；
+2. 必须严格遵循以下 JSON 结构；
+3. JSON 必须是单层结构，不允许嵌套或数组；
+4. 所有键值对的值类型必须是字符串；
+5. 输出必须是合法 JSON，可被 Python `json.loads` 直接解析。
 
-以 JSON 的形式输出输出的 JSON,需遵守以下的格式：
+# JSON 结构
 
 ```json
 {
-  "eda": <数据分析EDA方案>,
-  "ques1": <问题1的建模思路和模型方案>,
-  "quesN": <问题N的建模思路和模型方案>,
-  "sensitivity_analysis": <敏感性分析方案>,
+  "eda": "<数据分析EDA方案>",
+  "ques1": "<问题1的建模思路和模型方案>",
+  "ques2": "<问题2的建模思路和模型方案>",
+  ...
+  "quesN": "<问题N的建模思路和模型方案>",
+  "sensitivity_analysis": "<敏感性分析方案>"
 }
-```
+````
 
-根据实际问题数量动态生成ques1,ques2...quesN
+# 特别说明
 
-## 输出约束
-
-1. json key 只能是上面的: eda,ques1,quesN,sensitivity_analysis
-2. 严格保持单层JSON结构
-3. 键值对值类型：字符串
-4. 禁止嵌套/多级JSON
+* 根据实际问题数量动态生成 ques1 \\~ quesN；
+* 键名只能是：eda、ques1…quesN、sensitivity\\_analysis；
+* 严禁新增字段、严禁输出注释或额外说明。
 """
 
 CODER_PROMPT = f"""
@@ -781,6 +774,8 @@ Consider:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\workflow.py 的内容:
 ================================================================================
+# app/core/workflow.py
+
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
@@ -1038,17 +1033,20 @@ class MathModelWorkFlow(WorkFlow):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\agents\agent.py 的内容:
 ================================================================================
+# app/core/agents/agent.py
+
 import json
 from app.core.llm.llm import LLM, simple_chat
 from app.utils.log_util import logger
 from icecream import ic
 from litellm import token_counter  # 用于按 token 估算
 
-# TODO: Memory 的管理
-# TODO: 评估任务完成情况，rethinking
+# 统一文本工具 / JSON 修复器
+from app.tools.text_sanitizer import TextSanitizer as TS
+from app.tools.json_fixer import JsonFixer  # 提供 LLM 重建修复 + 本地兜底
 
 # 软阈值：优先在到达硬上限前做清理，避免 400/ContextWindowExceeded
-SOFT_TOKEN_LIMIT = 100_000  # 可视需要调大/调小;理论最大值：≤131072（超过就一定报错）;建议范围：80k – 110k
+SOFT_TOKEN_LIMIT = 100_000  # 可按需调整
 
 
 class Agent:
@@ -1061,21 +1059,46 @@ class Agent:
     ) -> None:
         self.task_id = task_id
         self.model = model
-        self.chat_history: list[dict] = []  # 存储对话历史
-        self.max_chat_turns = max_chat_turns  # 最大对话轮次
-        self.current_chat_turns = 0  # 当前对话轮次计数器
-        self.max_memory = max_memory  # 最大记忆轮次（条数兜底）
+        self.chat_history: list[dict] = []  # 存储对话历史（只包含 system/user/assistant/tool）
+        self.max_chat_turns = max_chat_turns
+        self.current_chat_turns = 0
+        self.max_memory = max_memory
         self._inited = False  # 仅首次注入 system
+
+    # ---------------- 公用小工具（供子类直接调用） ---------------- #
+
+    @staticmethod
+    def sanitize_text_for_history(text: str) -> str:
+        """统一的历史入库清洗：去控制字符（保留 \t \n \r）+ 去 ANSI 颜色控制序列。"""
+        if text is None:
+            return ""
+        text = TS.clean_control_chars(text, keep_whitespace=True)
+        text = TS.strip_ansi(text)
+        return text
+
+    async def fix_and_parse_json(self, raw_text: str):
+        """
+        一步完成：提取/剥离围栏 → 修非法转义 → json.loads → 失败则 JsonFixer（含一次 LLM 重建修复）
+        返回: (obj, stage)；obj 解析失败时为 None，stage 记录修复阶段。
+        """
+        # 预清洗：控制字符 + 常见瑕疵
+        prepared = TS.clean_control_chars(raw_text or "", keep_whitespace=True)
+        prepared = TS.normalize_common_glitches(prepared)
+
+        # 直接交给 JsonFixer（其内部会 strip fences、修非法转义，并尝试 json.loads；
+        # 如失败，再调用一次 LLM 进行重建修复）
+        obj, stage = await JsonFixer.fix_and_parse(
+            raw=prepared,
+            llm=self.model,  # 若不想用二次 LLM，可改为 llm=None
+            agent_name=f"{self.__class__.__name__}.JsonFixer",
+        )
+        return obj, stage
+
+    # ---------------- 基类默认对话 ---------------- #
 
     async def run(self, prompt: str, system_prompt: str, sub_title: str) -> str:
         """
-        执行agent的对话并返回结果和总结
-
-        Args:
-            prompt: 输入的提示
-
-        Returns:
-            str: 模型的响应
+        执行agent的对话并返回结果（基类简单实现；复杂流程请在子类覆盖）
         """
         try:
             logger.info(f"{self.__class__.__name__}:开始:执行对话")
@@ -1094,7 +1117,9 @@ class Agent:
                 agent_name=self.__class__.__name__,
                 sub_title=sub_title,
             )
-            response_content = response.choices[0].message.content
+            response_content = getattr(response.choices[0].message, "content", "") or ""
+            response_content = self.sanitize_text_for_history(response_content)
+
             self.chat_history.append({"role": "assistant", "content": response_content})
             logger.info(f"{self.__class__.__name__}:完成:执行对话")
             return response_content
@@ -1103,15 +1128,18 @@ class Agent:
             logger.error(f"Agent执行失败: {str(e)}")
             return error_msg
 
+    # ---------------- 历史入库：统一清洗与规范化 ---------------- #
+
     async def append_chat_history(self, msg: dict) -> None:
         """
         稳健的消息追加函数 - 标准化为 OpenAI Chat Completions 规范（只用 system/user/assistant/tool）
         功能：
-        1) 规范化入参（把对象/非 dict 情况转换为 dict）
+        1) 规范化入参（对象→dict）
         2) 强制保证 msg['content'] 为字符串（绝不为 None）
-        3) 对工具响应消息（role == 'tool'）尽量抽取可读文本并填充 content
+        3) 对工具响应（role='tool'）尽量抽取可读文本
         4) 标准化 tool_calls（arguments→字符串；type=function）
-        5) 保持原有合并相邻 user / 内存清理 / 安全切割等逻辑
+        5) 入库前统一清洗（控制字符/ANSI）
+        6) 合并相邻 user / 触发内存清理
         """
         # —— 规范化入参 —— #
         if not isinstance(msg, dict):
@@ -1126,10 +1154,7 @@ class Agent:
         # 保证 role 字段存在且为字符串
         msg["role"] = msg.get("role", "assistant") or "assistant"
 
-        # ★ 关键：不要把 'tool' 改成 'function'（OpenAI 合法角色只有 system/user/assistant/tool）
-        # 如果历史里曾混入 'function'（旧实现遗留），建议在 llm.py 的 sanitize 中兜底改回 'tool'，这里不做角色替换
-
-        # —— 重要：确保 content 字段永远为字符串（非 None） —— #
+        # —— 确保 content 是字符串 —— #
         raw_content = msg.get("content", "")
         if raw_content is None:
             raw_content = ""
@@ -1138,13 +1163,12 @@ class Agent:
         if msg["role"] == "tool" and (not raw_content or str(raw_content).strip() == ""):
             extracted_parts = []
 
-            # 1) 优先查看 msg.get("output")（常见为 list/dict/str）
+            # 1) 优先查看 msg.get("output") 或常见别名
             out = msg.get("output") or msg.get("outputs") or msg.get("result") or msg.get("results")
             if out is not None:
                 if isinstance(out, (list, tuple)):
                     for item in out:
                         if isinstance(item, dict):
-                            # 常见字段：msg, message, text, result, content
                             for k in ("msg", "message", "text", "result", "content"):
                                 v = item.get(k)
                                 if v:
@@ -1207,7 +1231,7 @@ class Agent:
                     parts.append(s)
                 raw_content = "\n".join(parts)
 
-        # 最终确保为字符串（防止非 str 类型）
+        # 最终确保为字符串
         try:
             if isinstance(raw_content, str):
                 final_content = raw_content
@@ -1216,7 +1240,8 @@ class Agent:
         except Exception:
             final_content = ""
 
-        # 把标准化后的 content 放回 msg
+        # 入库前统一清洗：控制字符 + ANSI
+        final_content = self.sanitize_text_for_history(final_content)
         msg["content"] = final_content
 
         # —— 合并相邻 user —— #
@@ -1302,12 +1327,11 @@ class Agent:
         else:
             ic("跳过内存清理(tool 消息)")
 
+    # ---------------- 内存清理：重量版总结 + 安全切割 ---------------- #
+
     async def clear_memory(self):
         """当聊天历史超过限制时，使用 simple_chat 进行“重量版”总结压缩"""
         ic(f"检查内存清理: 当前={len(self.chat_history)}, 最大(条数兜底)={self.max_memory}")
-
-        # 条数不超时也可能因 token 超限，这里不再提前 return
-
         ic("开始内存清理")
         logger.info(f"{self.__class__.__name__}:开始清除记忆，当前记录数：{len(self.chat_history)}")
 
@@ -1327,14 +1351,14 @@ class Agent:
             ic(f"总结范围: {start_idx} -> {end_idx}")
 
             if end_idx > start_idx:
-                # 构造摘要提示，仅传“需要总结的片段”（重量版 simple_chat 会做中段摘要+工具修复）
+                # 构造摘要提示，仅传“需要总结的片段”
                 summarize_history = []
                 if system_msg:
                     summarize_history.append(system_msg)
 
                 summarize_history.append(
                     {
-                        "role": "user",  # 修改：使用 user 角色
+                        "role": "user",
                         "content": (
                             "请简洁总结以下对话的关键内容和重要结论，保留重要的上下文信息：\n\n"
                             f"{self._format_history_for_summary(self.chat_history[start_idx:end_idx])}"
@@ -1342,7 +1366,7 @@ class Agent:
                     }
                 )
 
-                # 调用 simple_chat 进行总结（重量版已在 llm.py 中实现）
+                # 调用 simple_chat 进行总结
                 summary = await simple_chat(self.model, summarize_history)
 
                 # 重构聊天历史：系统消息 + 摘要 + 保留的消息（最后若干条）
@@ -1350,9 +1374,7 @@ class Agent:
                 if system_msg:
                     new_history.append(system_msg)
 
-                new_history.append(
-                    {"role": "user", "content": f"[历史对话总结-仅供上下文，无需回复]\n{summary}"}
-                )  # 修改：使用 user 角色
+                new_history.append({"role": "user", "content": f"[历史对话总结-仅供上下文，无需回复]\n{summary}"})
                 new_history.extend(self.chat_history[preserve_start_idx:])
 
                 # 确保 system 后第一条是 user
@@ -1370,9 +1392,11 @@ class Agent:
             safe_history = self._get_safe_fallback_history()
             self.chat_history = safe_history
 
+    # ---------------- 切割点选择与辅助 ---------------- #
+
     def _find_safe_preserve_point(self) -> int:
         """找到安全的保留起始点，确保不会破坏工具调用序列"""
-        # 最少保留最后10条消息，确保基本对话完整性（由原先3条提高到10条）
+        # 最少保留最后10条消息，确保基本对话完整性
         min_preserve = min(10, len(self.chat_history))
         preserve_start = len(self.chat_history) - min_preserve
         ic(f"寻找安全保留点: 历史长度={len(self.chat_history)}, 最少保留={min_preserve}, 开始位置={preserve_start}")
@@ -1382,7 +1406,6 @@ class Agent:
             if i >= len(self.chat_history):
                 continue
 
-            # 检查从这个位置开始是否是安全的（没有孤立的 function/tool 消息）
             is_safe = self._is_safe_cut_point(i)
             ic(f"检查位置 {i}: 安全={is_safe}")
             if is_safe:
@@ -1416,7 +1439,6 @@ class Agent:
                         prev_msg = self.chat_history[j]
                         if isinstance(prev_msg, dict) and "tool_calls" in prev_msg and prev_msg["tool_calls"]:
                             for tool_call in prev_msg["tool_calls"]:
-                                # 工具调用条目可能是字典或对象，尝试标准化比较
                                 tid = None
                                 if isinstance(tool_call, dict):
                                     tid = tool_call.get("id")
@@ -1441,7 +1463,6 @@ class Agent:
         if not self.chat_history:
             return []
 
-        # 保留系统消息
         safe_history = []
         if self.chat_history and self.chat_history[0].get("role") == "system":
             safe_history.append(self.chat_history[0])
@@ -1466,7 +1487,6 @@ class Agent:
         """查找最后一个未匹配的tool call的索引"""
         ic("开始查找未匹配的tool_call")
 
-        # 从后往前查找，寻找没有对应工具响应的 tool call
         for i in range(len(self.chat_history) - 1, -1, -1):
             msg = self.chat_history[i]
 
@@ -1482,7 +1502,6 @@ class Agent:
                     ic(f"检查tool_call_id: {tool_call_id}")
 
                     if tool_call_id:
-                        # 在后续消息中查找对应的工具响应
                         response_found = False
                         for j in range(i + 1, len(self.chat_history)):
                             response_msg = self.chat_history[j]
@@ -1496,7 +1515,6 @@ class Agent:
                                 break
 
                         if not response_found:
-                            # 找到未匹配的tool call
                             ic(f"❌ 发现未匹配的tool_call在位置 {i}, id={tool_call_id}")
                             return i
 
@@ -1504,16 +1522,17 @@ class Agent:
         return None
 
     def _format_history_for_summary(self, history: list[dict]) -> str:
-        """格式化历史记录用于总结"""
+        """格式化历史记录用于总结（控制长度）"""
         formatted = []
         for msg in history:
             role = msg.get("role")
             content = msg.get("content") or ""
-            content = content[:500] + "..." if len(content) > 500 else content  # 限制长度
+            content = content[:500] + "..." if len(content) > 500 else content
             formatted.append(f"{role}: {content}")
         return "\n".join(formatted)
 
     def _ensure_first_after_system_user(self, history: list) -> list:
+        """确保在 system 之后，第一条是 user（除非第一条 assistant 正在发起 tool_calls）"""
         if not history:
             return [{"role": "user", "content": "[空对话启动] 继续。"}]
 
@@ -1526,7 +1545,6 @@ class Agent:
 
         first_msg = history[i]
         if first_msg.get("role") != "user":
-            # 如果是assistant但包含tool_calls，就不要强插user，避免打断“调用→结果”序列
             if first_msg.get("role") == "assistant" and first_msg.get("tool_calls"):
                 return history
             content = (first_msg.get("content") or "").strip()
@@ -1538,10 +1556,11 @@ class Agent:
         return history
 
 
-
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\agents\coder_agent.py 的内容:
 ================================================================================
+# app/core/agents/coder_agent.py
+
 from app.core.agents.agent import Agent
 from app.config.setting import settings
 from app.utils.log_util import logger
@@ -1553,69 +1572,22 @@ from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT
 from app.utils.common_utils import get_current_files
 import json
-import re
 from app.core.prompts import get_reflection_prompt, get_completion_check_prompt
 from app.core.functions import coder_tools
 from icecream import ic
 
-
-def _strip_md_fences(s: str) -> str:
-    """去掉 ``` / ```json / ```python 这种 Markdown 代码栅栏。"""
-    s = s.strip()
-    if s.startswith("```"):
-        # 去头
-        s = re.sub(r"^```[a-zA-Z0-9_+-]*\s*", "", s)
-        # 去尾
-        s = re.sub(r"\s*```$", "", s)
-    return s.strip()
+# 统一的文本/代码清洗器（集中管理正则等）
+from app.tools.text_sanitizer import TextSanitizer as TS
 
 
 def _safe_get_code_from_arguments(args_raw) -> str:
     """
     尽可能稳妥地从 tool.arguments 中拿到 code。
-    支持:
-      - dict: {"code": "..."}
-      - 纯 JSON 字符串
-      - 带 ```json / ```python 栅栏的 JSON/文本
-      - “\"code\": \"...\"” 宽松匹配
-      - “code: ...” 键值对风格
-      - 最后兜底：把原始字符串当作代码
+    现在全部委托给 TextSanitizer.extract_code_from_arguments，以保证提取逻辑集中并可维护。
     """
-    if args_raw is None:
-        return ""
-
-    # SDK 可能已经是 dict
-    if isinstance(args_raw, dict):
-        return args_raw.get("code", "") or ""
-
-    if not isinstance(args_raw, str):
-        return ""
-
-    s = _strip_md_fences(args_raw)
-
-    # 先尝试严格 JSON
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj.get("code", "") or ""
-    except Exception:
-        pass
-
-    # 宽松匹配 "code": "...."
-    m = re.search(r'"code"\s*:\s*"(.*)"\s*\}?$', s, flags=re.DOTALL)
-    if m:
-        return m.group(1)
-
-    # YAML/键值对风格：code: ....
-    m2 = re.search(r"(?im)^\s*code\s*:\s*(.+)\s*$", s, flags=re.DOTALL)
-    if m2:
-        return m2.group(1).strip()
-
-    # 兜底：把整个串当作代码
-    return s
+    return TS.extract_code_from_arguments(args_raw)
 
 
-# 代码手
 class CoderAgent(Agent):  # 同样继承自Agent类
     def __init__(
         self,
@@ -1685,19 +1657,51 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
             # 规范化 assistant 消息对象
             assistant_msg_obj = response.choices[0].message
-            assistant_content = getattr(assistant_msg_obj, "content", "") or ""
+            assistant_content_raw = getattr(assistant_msg_obj, "content", "") or ""
             assistant_tool_calls = getattr(assistant_msg_obj, "tool_calls", None)
+
+            # 对 assistant 文本做三步清洗：控制字符 → 常见瑕疵 → 外层围栏
+            assistant_content_clean = TS.clean_control_chars(assistant_content_raw, keep_whitespace=True)
+            assistant_content_clean = TS.normalize_common_glitches(assistant_content_clean)
+            assistant_content_clean = TS.strip_fences_outer_or_all(assistant_content_clean)
 
             # 有工具调用（常见路径）
             if assistant_tool_calls:
                 logger.info("检测到工具调用")
                 # 先把 assistant 内容规范化写入历史（append_chat_history 会把 tool_calls 规范化）
                 await self.append_chat_history(
-                    {"role": "assistant", "content": assistant_content, "tool_calls": assistant_tool_calls}
+                    {"role": "assistant", "content": assistant_content_clean, "tool_calls": assistant_tool_calls}
                 )
 
-                # 取第一个工具调用进行处理（当前仅支持 execute_code）
-                tool_call = assistant_tool_calls[0]
+                # 🔍 从 tool_calls 中优先寻找第一个 execute_code 调用（更稳妥）
+                tool_call = None
+                for tc in assistant_tool_calls:
+                    try:
+                        fn = getattr(tc.function, "name", None)
+                        if fn == "execute_code":
+                            tool_call = tc
+                            break
+                    except Exception:
+                        continue
+
+                if tool_call is None:
+                    # 未发现 execute_code，按未知工具处理
+                    first_tc = assistant_tool_calls[0]
+                    tool_id = getattr(first_tc, "id", None)
+                    fn_name = getattr(first_tc.function, "name", None)
+                    logger.warning(f"未发现 execute_code 调用（收到 {len(assistant_tool_calls)} 个工具），跳过处理。")
+                    await self.append_chat_history(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": fn_name or "unknown",
+                            "content": "未检测到可执行的 execute_code 调用，未执行。",
+                        }
+                    )
+                    retry_count += 1
+                    continue
+
+                # ========= execute_code 路径 =========
                 tool_id = getattr(tool_call, "id", None)
                 fn_name = getattr(tool_call.function, "name", None)
 
@@ -1711,11 +1715,11 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                     # 解析代码参数（稳健版）
                     try:
-                        code = _safe_get_code_from_arguments(getattr(tool_call.function, "arguments", None))
-                        if not isinstance(code, str):
-                            code = str(code or "")
+                        raw_code = _safe_get_code_from_arguments(getattr(tool_call.function, "arguments", None))
+                        if not isinstance(raw_code, str):
+                            raw_code = str(raw_code or "")
                     except Exception as e:
-                        code = ""
+                        raw_code = ""
                         logger.exception("解析 tool.arguments 失败")
                         # 工具解析报错 → 工具结果消息（role='tool'）写回
                         await self.append_chat_history(
@@ -1730,21 +1734,38 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         last_error_message = f"解析工具参数失败: {e}"
                         continue
 
-                    # 如果 code 为空，跳过工具调用
-                    if not code:
+                    # 兜底：若 code 为空，跳过工具调用
+                    if not raw_code.strip():
                         logger.warning("代码为空，跳过工具调用")
-                        # 可以发送系统消息通知
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(content="任务跳过：代码为空，未执行工具调用", type="warning"),
                         )
-                        continue  # 跳过当前循环，进入下一轮
+                        # 引导模型提供实际代码
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "你提供的 execute_code.arguments 里没有有效的代码，请重新调用 execute_code 并给出可运行的 Python 代码。"
+                                ),
+                            }
+                        )
+                        retry_count += 1
+                        continue
 
+                    # ====== 下发给执行器前统一修复/规范化代码 ======
+                    try:
+                        # 使用 TextSanitizer 的 normalize_for_execution（集中管理）
+                        code = TS.normalize_for_execution(raw_code, language="python")
+                    except Exception as e:
+                        # 若修复器出错，则退回到原始代码（保守策略），并记录日志
+                        logger.exception(f"代码修复器失败，使用原始代码继续执行: {e}")
+                        code = raw_code
+
+                    # 将修复后的代码先发布为 InterpreterMessage（便于前端查看将要执行的代码）
                     await redis_manager.publish_message(
                         self.task_id,
-                        InterpreterMessage(
-                            input={"code": code},
-                        ),
+                        InterpreterMessage(input={"code": code}),
                     )
 
                     # 执行工具调用（实际运行代码）
@@ -1801,8 +1822,9 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                         # 进入下一轮，由模型决定是否继续调用工具或直接总结结束
                         continue
+
                 else:
-                    # 未知工具，写日志并尝试继续（或可扩展支持更多工具）
+                    # 理论上不会到这里（上面已筛过 execute_code），留做防御
                     logger.warning(f"收到未知工具调用: {fn_name}，跳过处理。")
                     await self.append_chat_history(
                         {
@@ -1819,8 +1841,8 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                 # 没有 tool_calls 的 assistant 响应 —— 不要马上判定完成
                 logger.info("收到 assistant 没有 tool_calls 的响应，进入完成性判定逻辑")
 
-                # 先把 assistant 内容规范化写入历史
-                await self.append_chat_history({"role": "assistant", "content": assistant_content})
+                # 先把 assistant 内容（清洗后）写入历史
+                await self.append_chat_history({"role": "assistant", "content": assistant_content_clean})
 
                 # 如果从未执行过任何 execute_code，则强制要求模型先执行代码
                 if not executed_tool_calls:
@@ -1835,7 +1857,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                     run_code_request = (
                         "注意：你此前仅以文字说明了计划，但没有实际执行任何代码。"
-                        " 现在请立刻调用 `execute_code` 工具并提供要执行的 Python 代码（确保生成本子任务需要的文件/图像/报告），"
+                        "现在请立刻调用 `execute_code` 工具并提供要执行的 Python 代码（确保生成本子任务需要的文件/图像/报告），"
                         "不要直接总结为“任务完成”，必须先运行并在工具响应中返回执行结果。"
                     )
 
@@ -1858,7 +1880,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     # 已至少执行过一次工具，而这次 assistant 没有发起工具调用，可视为模型在做总结
                     logger.info("已执行过工具，本次 assistant 无 tool_calls，被视为任务完成")
                     return CoderToWriter(
-                        coder_response=assistant_content,
+                        coder_response=assistant_content_clean,
                         created_images=await self.code_interpreter.get_created_images(subtask_title),
                     )
 
@@ -1890,6 +1912,8 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\agents\coordinator_agent.py 的内容:
 ================================================================================
+# app/core/agents/coordinator_agent.py
+
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import COORDINATOR_PROMPT
@@ -1898,64 +1922,11 @@ import re
 from app.utils.log_util import logger
 from app.schemas.A2A import CoordinatorToModeler
 
+# 统一的文本清洗工具
+from app.tools.text_sanitizer import TextSanitizer as TS
 
-def _cleanup_control_chars(s: str) -> str:
-    """去除会导致 json.loads 失败的控制字符"""
-    return re.sub(r"[\x00-\x1F\x7F]", "", s or "")
-
-
-def _strip_fences(s: str) -> str:
-    """去掉常见代码栅栏"""
-    s = s or ""
-    return s.replace("```json", "").replace("```", "").strip()
-
-
-def _extract_first_json_block(s: str) -> str:
-    """
-    用栈法提取首个 {...} JSON 块，比正则 {.*} 更稳健。
-    - 支持跳过字符串中的花括号
-    - 找不到时返回去栅栏后的原文（让后续报错更可读）
-    """
-    if not s:
-        return ""
-    s = _strip_fences(s)
-    start = s.find("{")
-    if start == -1:
-        return s.strip()
-    stack = []
-    in_str = False
-    esc = False
-    for i, ch in enumerate(s[start:], start):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                stack.append("{")
-            elif ch == "}":
-                if stack:
-                    stack.pop()
-                if not stack:
-                    return s[start : i + 1].strip()
-    # 如果栈没清空，返回原文（让上层抛 JSONDecodeError）
-    return s.strip()
-
-
-def _normalize_common_glitches(s: str) -> str:
-    """
-    规范常见“小毛病”：
-    1) "qu es2" -> "ques2"
-    2) 去栅栏
-    """
-    s = _strip_fences(s)
-    s = re.sub(r'"qu\s+es(\d+)"', r'"ques\1"', s)  # "qu es2" -> "ques2"
-    return s.strip()
+# 通用 JSON 提取/修复/解析工具
+from app.tools.json_fixer import JsonFixer
 
 
 class CoordinatorAgent(Agent):
@@ -1969,7 +1940,14 @@ class CoordinatorAgent(Agent):
         self.system_prompt = COORDINATOR_PROMPT
 
     async def run(self, ques_all: str) -> CoordinatorToModeler:
-        """用户输入问题 使用LLM 格式化 questions"""
+        """
+        将用户原始问题经 LLM 结构化为 questions(JSON)：
+        1) 调用 LLM 生成结构化回答
+        2) 使用 JsonFixer：提取 + 修复非法转义/围栏/坏 JSON + 解析
+           - 内置本地兜底与（可选）一次 LLM 重建修复
+        3) 校验字段并推断 ques_count
+        4) 返回 CoordinatorToModeler
+        """
         # 只注入一次 system，避免重复堆叠
         if not self._inited:
             await self.append_chat_history({"role": "system", "content": self.system_prompt})
@@ -1985,101 +1963,84 @@ class CoordinatorAgent(Agent):
         )
         raw_text = getattr(response.choices[0].message, "content", "") or ""
 
-        # 1) 基础清理
-        raw_text = _cleanup_control_chars(raw_text)
+        # 基础清理（尽量不破坏可读性；后续 JsonFixer 内部还有一轮清洗与抽取）
+        prepared_text = TS.clean_control_chars(raw_text, keep_whitespace=True)
+        prepared_text = TS.normalize_common_glitches(prepared_text)
 
-        # 2) 提取 JSON 主体（栈法）
-        json_text = _extract_first_json_block(raw_text)
+        # 统一走 JsonFixer：一步完成 提取→修复→解析（含一次 LLM 重建与本地兜底）
+        questions, stage = await JsonFixer.fix_and_parse(
+            raw=prepared_text,
+            llm=self.model,  # 若不希望二次调用 LLM 进行“重建修复”，可改为 llm=None
+            agent_name="CoordinatorAgent.JsonFixer",
+        )
+        logger.info(f"[CoordinatorAgent] JsonFixer stage: {stage}")
 
-        # 3) 规范常见问题
-        json_text = _normalize_common_glitches(json_text)
+        if questions is None:
+            # 记录原始文本，便于排查
+            logger.error(f"[CoordinatorAgent] 无法解析为 JSON。raw_text preview: {raw_text[:500]}")
+            raise ValueError(f"JSON 解析错误（{stage}）")
 
-        if not json_text:
-            raise ValueError("返回的 JSON 字符串为空，请检查模型输出或上游提示。")
+        if not isinstance(questions, dict):
+            raise ValueError("解析结果不是 JSON 对象（dict）。")
 
-        # 4) 解析为对象
-        try:
-            questions = json.loads(json_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON 解析错误，原始字符串: {json_text}")
-            raise ValueError(f"JSON 解析错误: {e}") from e
-
-        # 5) 兜底：确保 ques_count 存在且为 int
+        # 兜底：确保 ques_count 存在且为 int
         ques_count = questions.get("ques_count")
         if not isinstance(ques_count, int):
+            # 自动推断 quesN 键数量
             ques_keys = [k for k in questions.keys() if re.fullmatch(r"ques\d+", k)]
             if not ques_keys:
                 raise ValueError("缺少 ques_count 且未找到任何 quesN 键。")
             ques_count = max(int(k[4:]) for k in ques_keys)
             questions["ques_count"] = ques_count
 
-        logger.info(f"questions:{questions}")
+        logger.info(f"[CoordinatorAgent] questions: {json.dumps(questions, ensure_ascii=False)[:800]}")
 
-        # 6) 返回给后续的 ModelerAgent
+        # 返回给后续的 ModelerAgent
         return CoordinatorToModeler(questions=questions, ques_count=ques_count)
 
 
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\agents\modeler_agent.py 的内容:
 ================================================================================
+# app/core/agents/modeler_agent.py
+
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import MODELER_PROMPT
 from app.schemas.A2A import CoordinatorToModeler, ModelerToCoder
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager  # 用于右侧面板
-from app.schemas.response import ModelerMessage       # 右侧“建模手册”用
+from app.schemas.response import ModelerMessage  # 右侧“建模手册”用
 import json
-import re
 from icecream import ic
 
+# 将正则/清理逻辑集中到 TextSanitizer
+from app.tools.text_sanitizer import TextSanitizer as TS
+from app.tools.json_fixer import JsonFixer
 
-# === 工具函数 ===
+
+# === 工具函数（行为与原实现等价，但委托给 TS） ===
+
 
 def _cleanup_control_chars(s: str) -> str:
     """去掉会导致 json.loads 失败的控制字符"""
-    return re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]", "", s or "")
+    return TS.clean_control_chars(s, keep_whitespace=True)
 
 
 def _strip_fences(s: str) -> str:
     """去掉 ```json / ``` 围栏"""
-    s = s or ""
-    return s.replace("```json", "").replace("```", "").strip()
+    return TS.strip_fences_outer_or_all(s)
 
 
 def _extract_first_json(text: str) -> str:
     """
     用“栈法”提取首个配平的 JSON 对象字符串，比 {.*} 更稳健：
-    - 支持跳过字符串中的花括号
-    - 找不到时返回空串，让上层按逻辑报错
     """
     if not text:
         return ""
-    text = _strip_fences(text)
-    start = text.find("{")
-    if start == -1:
-        return ""
-    stack = []
-    in_str, esc = False, False
-    for i, ch in enumerate(text[start:], start):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        else:
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                stack.append("{")
-            elif ch == "}":
-                if stack:
-                    stack.pop()
-                if not stack:
-                    return text[start : i + 1]
-    return ""  # 未闭合，交由上层修复/报错
+    # 原实现先去掉围栏再做栈法；为了等价，直接让 TS 在外部不重复 strip（我们已在调用处 strip 过）
+    # 这里假定传入 text 已为去栅栏后的字符串（与原实现一致）。
+    return TS.extract_first_json_block(text, strip_fences_first=False)
 
 
 def _try_json_loads(s: str):
@@ -2103,11 +2064,9 @@ class ModelerAgent(Agent):  # 继承自Agent类
     async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:
         """
         解析大模型返回的 JSON：
-        1. 清理 Markdown 围栏与控制字符
-        2. 提取首个 JSON（栈法）
-        3. 如失败 → 走 JsonFixer 一次；再失败 → fallback 简单规则修复
-        4. 严格校验必须是 dict
-        5. 解析成功后显式发布 ModelerMessage（右侧“建模手册”）
+        - 清理 Markdown 围栏与控制字符
+        - JsonFixer 提取+修复+解析（含 LLM 重建 & 本地兜底）
+        - 严格校验为 dict，成功后发布 ModelerMessage
         """
         # 只注入一次 system
         if not self._inited:
@@ -2128,67 +2087,32 @@ class ModelerAgent(Agent):  # 继承自Agent类
         )
 
         raw_content = getattr(response.choices[0].message, "content", "") or ""
-        logger.debug(f"[ModelerAgent] raw preview: {raw_content[:400]}")
+        logger.debug(f"[ModelerAgent] raw preview: {raw_content[:2000]}")
 
         # Step1: 清理围栏与控制字符
         content = _strip_fences(_cleanup_control_chars(raw_content))
 
-        # Step2: 提取首个 JSON
-        json_str = _extract_first_json(content)
-        if not json_str:
-            raise ValueError("返回内容中未找到 JSON。")
+        # Step2: 一步到位：提取 + 修复 + 解析（含 LLM 重建与本地兜底）
+        questions_solution, stage = await JsonFixer.fix_and_parse(
+            raw=content,
+            llm=self.model,  # 允许用当前 LLM 做一次“重建修复”；若不想用，可改为 llm=None
+            agent_name=f"{self.__class__.__name__}.JsonFixer",
+        )
+        logger.info(f"[ModelerAgent] JsonFixer stage: {stage}")
 
-        # Step3: 尝试直接解析
-        questions_solution = _try_json_loads(json_str)
-
-        # Step4: 如果失败，走重量级修复（JsonFixer）
+        # Step3: 严格校验
         if questions_solution is None:
-            logger.warning("[ModelerAgent] JSONDecodeError → 启动 JsonFixer")
-            fix_history = [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是严格的 JSON 修复器。\n"
-                        "要求：\n"
-                        "1) 仅输出一个 JSON 对象，不能包含解释或额外文本；\n"
-                        "2) 保证是合法 JSON（双引号、转义符正确），能被 Python json.loads 解析；\n"
-                        "3) 类型必须是对象（dict），不要数组或多对象。"
-                    ),
-                },
-                {"role": "user", "content": json_str},
-            ]
-            fix_resp = await self.model.chat(
-                history=fix_history,
-                agent_name=self.__class__.__name__,
-                sub_title="JsonFixer",
-            )
-            fixed = _strip_fences(getattr(fix_resp.choices[0].message, "content", "") or "")
-            fixed_json_str = _extract_first_json(fixed)
-            if not fixed_json_str:
-                raise ValueError("JsonFixer 未生成可识别的 JSON。")
-            questions_solution = _try_json_loads(fixed_json_str)
-
-        # Step5: 如果还是失败，fallback 规则修复
-        if questions_solution is None:
-            logger.error("[ModelerAgent] JsonFixer 失败 → 启动 fallback 规则修复")
-            safe_str = re.sub(r",\s*}", "}", json_str)
-            safe_str = re.sub(r",\s*]", "]", safe_str)
-            safe_str = safe_str.replace("'", '"')
-            questions_solution = _try_json_loads(safe_str)
-
-        # Step6: 仍失败 → 抛错；非 dict → 抛错
-        if questions_solution is None:
-            raise ValueError("JSON 修复完全失败，无法解析。")
+            raise ValueError(f"JSON 修复完全失败，无法解析（{stage}）。")
         if not isinstance(questions_solution, dict):
             raise ValueError("解析结果不是 JSON 对象（dict）。")
 
         ic(questions_solution)
 
-        # Step7: 显式发布结构化 ModelerMessage —— 右侧“建模手册”面板需要这一条
+        # Step4: 显式发布结构化 ModelerMessage —— 右侧“建模手册”面板需要这一条
         try:
             await redis_manager.publish_message(
                 self.task_id,
-                ModelerMessage(content=json.dumps(questions_solution, ensure_ascii=False)),
+                ModelerMessage(content=questions_solution),
             )
         except Exception as e:
             logger.warning(f"发布 ModelerMessage 失败（继续返回给后续流程）: {e}")
@@ -2200,6 +2124,8 @@ class ModelerAgent(Agent):  # 继承自Agent类
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\agents\writer_agent.py 的内容:
 ================================================================================
+# app/core/agents/writer_agent.py
+
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import get_writer_prompt
@@ -2216,14 +2142,16 @@ from app.schemas.A2A import WriterResponse
 import re
 from typing import List, Tuple
 
+# 统一文本清洗（与 Coordinator/Modeler 保持一致思路）
+from app.tools.text_sanitizer import TextSanitizer as TS
+
 
 class WriterAgent(Agent):
     """
     写作手：
-    - 统一使用 OpenAI 兼容的工具流：
-      assistant.tool_calls -> 工具结果消息（role="tool", tool_call_id, content）
-    - 对工具返回进行体积限制，避免超长上下文
-    - 图片引用校验与自动纠错迭代
+    - 不暴露任何外部工具；只产出正文（Markdown）
+    - 统一做文本清洗（控制字符、常见瑕疵、外层围栏）
+    - 校验图片引用，仅允许来自“可用图片清单”，且每张只用一次
     """
 
     def __init__(
@@ -2280,7 +2208,7 @@ class WriterAgent(Agent):
         # 禁用工具暴露（不允许任何外部工具被调用）
         response = await self.model.chat(
             history=self.chat_history,
-            tools=[],          # 不暴露任何工具
+            tools=[],  # 不暴露任何工具
             tool_choice=None,  # 不允许选择工具
             agent_name=self.__class__.__name__,
             sub_title=sub_title,
@@ -2288,8 +2216,9 @@ class WriterAgent(Agent):
 
         # 从源头即使用严格类型：List[Tuple[str, str]]
         footnotes: List[Tuple[str, str]] = []
+
         assistant_msg_obj = response.choices[0].message
-        assistant_content = getattr(assistant_msg_obj, "content", "") or ""
+        assistant_content_raw = getattr(assistant_msg_obj, "content", "") or ""
         assistant_tool_calls = getattr(assistant_msg_obj, "tool_calls", None)
 
         # 若模型仍“幻想”生成了 tool_calls，记录并忽略，继续正文
@@ -2299,21 +2228,28 @@ class WriterAgent(Agent):
                 self.task_id,
                 SystemMessage(content="写作手收到工具调用，但已禁用所有外部工具，已忽略。", type="warning"),
             )
-            await self.append_chat_history({
-                "role": "tool",
-                "name": "disabled",
-                "tool_call_id": f"call_{uuid.uuid4().hex[:12]}",
-                "content": "所有外部工具已禁用，忽略此次调用。",
-            })
+            await self.append_chat_history(
+                {
+                    "role": "tool",
+                    "name": "disabled",
+                    "tool_call_id": f"call_{uuid.uuid4().hex[:12]}",
+                    "content": "所有外部工具已禁用，忽略此次调用。",
+                }
+            )
 
-        # 直接追加 assistant 内容
+        # 文本清洗（与其它 Agent 保持一致的三步：控制字符 → 常见瑕疵 → 外层围栏）
+        assistant_content = TS.clean_control_chars(assistant_content_raw, keep_whitespace=True)
+        assistant_content = TS.normalize_common_glitches(assistant_content)
+        assistant_content = TS.strip_fences_outer_or_all(assistant_content)
+
+        # 直接追加 assistant 内容（清洗后）
         await self.append_chat_history({"role": "assistant", "content": assistant_content})
 
-        # 最终文本
+        # 最终文本初始化
         response_content = assistant_content or ""
 
-        # 图片引用校验与纠错迭代
-        max_fix_attempts = 100
+        # 图片引用校验与纠错迭代（把上限调小，避免不必要的长循环）
+        max_fix_attempts = 5
         attempt = 0
         while attempt <= max_fix_attempts:
             img_paths = self._extract_image_paths(response_content)
@@ -2336,12 +2272,14 @@ class WriterAgent(Agent):
 
             error_msg = "\n".join(error_lines)
             logger.warning(f"图片引用校验未通过（尝试 {attempt}/{max_fix_attempts}）：\n{error_msg}")
-            await redis_manager.publish_message(self.task_id, SystemMessage(content=f"写作校验：图片引用问题，{error_msg}", type="error"))
+            await redis_manager.publish_message(
+                self.task_id, SystemMessage(content=f"写作校验：图片引用问题，{error_msg}", type="error")
+            )
 
             correction_prompt = (
                 "检测到图片引用不合规。请根据可用图片清单修正文章中的图片引用：\n"
                 "1. 只从下列可用图片中选择并使用（每张图片只能引用一次）：\n"
-                + "\n".join(self.available_images)
+                + "\n".join(self.available_images or [])
                 + "\n\n"
                 "2. 对于当前不在清单中的引用，请用占位格式替换：\n"
                 "   （占位：请在 <合法前缀>/figures/<期望文件名.png> 生成图后替换本段图片引用）\n"
@@ -2353,18 +2291,23 @@ class WriterAgent(Agent):
             # 纠错对话也禁用工具
             fix_resp = await self.model.chat(
                 history=self.chat_history,
-                tools=[],          # 不暴露任何工具
+                tools=[],  # 不暴露任何工具
                 tool_choice=None,  # 不允许选择工具
                 agent_name=self.__class__.__name__,
                 sub_title=sub_title,
             )
-            fix_assistant = getattr(fix_resp.choices[0].message, "content", "") or ""
+            fix_assistant_raw = getattr(fix_resp.choices[0].message, "content", "") or ""
+
+            # 对纠错返回也做同样的清洗，避免把控制字符/围栏再次带回上下文
+            fix_assistant = TS.clean_control_chars(fix_assistant_raw, keep_whitespace=True)
+            fix_assistant = TS.normalize_common_glitches(fix_assistant)
+            fix_assistant = TS.strip_fences_outer_or_all(fix_assistant)
+
             await self.append_chat_history({"role": "assistant", "content": fix_assistant})
             response_content = fix_assistant
 
         # 源头即严格类型，无需再归一化
         return WriterResponse(response_content=response_content, footnotes=footnotes)
-
 
     # ============== 图片工具 ==============
 
@@ -2394,6 +2337,7 @@ class WriterAgent(Agent):
                 invalids.append(p)
                 continue
             ok_prefix = False
+            # 显式允许常见两类路径；或 quesN/figures/
             if p.startswith("eda/figures/") or p.startswith("sensitivity_analysis/figures/"):
                 ok_prefix = True
             else:
@@ -2408,12 +2352,16 @@ class WriterAgent(Agent):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\llm\llm.py 的内容:
 ================================================================================
-import re
+# app/core/llm/llm.py
+
 import json
+import codecs
+import string
 import asyncio
 import random
 import uuid
 from typing import Any, List, Dict
+
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
 from app.schemas.response import (
@@ -2429,6 +2377,10 @@ import litellm
 from app.schemas.enums import AgentType
 from app.utils.track import agent_metrics
 from icecream import ic
+
+# 引入集中式清洗/正则工具
+from app.tools.text_sanitizer import TextSanitizer as TS
+from app.tools.json_fixer import JsonFixer
 
 # ====== 全局：请求与重试配置（可按需调大/调小）======
 REQUEST_TIMEOUT = 300.0  # 单次请求整体超时（秒）
@@ -2512,6 +2464,13 @@ def _extract_tool_text(msg: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _looks_like_literal_escapes(s: str) -> bool:
+    """
+    委托给 TextSanitizer 的实现，保持行为一致。
+    """
+    return TS.looks_like_literal_escapes(s)
+
+
 def _stringify_tool_calls(tc_list: Any) -> Any:
     """把 assistant 消息里的 tool_calls.arguments 强制转成字符串，并兜底 function.name / type / id"""
     if not isinstance(tc_list, (list, tuple)):
@@ -2552,12 +2511,11 @@ def _stringify_tool_calls(tc_list: Any) -> Any:
 
 def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    最后一跳强制清洗（OpenAI/DeepSeek 兼容）：
-    1) 仅保留 _ALLOWED_KEYS 字段
-    2) 规范 assistant.tool_calls（字符串化 arguments / 补 id / type='function'）
-    3) 将任何遗留的 role=='function' 统一改为 role=='tool'（OpenAI 合法角色只有 system/user/assistant/tool）
-    4) tool 响应按出现顺序绑定最近一次未消费的 tool_call_id；无匹配 id 的“孤儿工具响应”直接丢弃
-    5) 丢弃纯空消息（system 允许为空；其它角色为空则去除），并清理 None 值
+    最后一跳强制清洗（OpenAI/DeepSeek 兼容）改良版：保留原有行为。
+    1) 不会无脑转义或移除换行
+    2) 如果 content 是 list-of-lines，保留并合并为真实换行
+    3) 若 content 为字符串且仅包含字面 '\\n'（没有真实 '\n'），则保守地尝试一次反转义为真实换行
+    4) 其它行为与原版一致：规范角色、处理 assistant.tool_calls、绑定 tool_call_id、丢弃孤儿消息等
     """
     result: List[Dict[str, Any]] = []
     if not history:
@@ -2573,14 +2531,11 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
 
         # -------- 角色规范化 --------
         role = m.get("role") or base.get("role") or "assistant"
-        # 统一支持的角色集合：system / user / assistant / tool
-        # 注：任何遗留的 "function" 都视为 "tool"
         if role == "function":
             role = "tool"
             if not isinstance(m.get("name"), str) or not m.get("name"):
                 m["name"] = base.get("name") or "tool"
         elif role == "tool":
-            # 合法，保持
             pass
         elif role not in ("system", "user", "assistant"):
             logger.warning(f"[sanitize] unexpected role={role} at idx={idx}, fallback to 'assistant'")
@@ -2591,37 +2546,84 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
         if role == "assistant" and base.get("tool_calls"):
             tool_calls = _stringify_tool_calls(base.get("tool_calls"))
             m["tool_calls"] = tool_calls
-            # 建立待匹配 id 队列
             for tc in tool_calls or []:
                 tc_id = (tc or {}).get("id")
                 if isinstance(tc_id, str) and tc_id:
                     pending_tool_ids.append(tc_id)
 
         # -------- content 规范化（所有角色）--------
-        content = m.get("content", "")
-        if content is None:
-            content = ""
-        if not isinstance(content, str):
-            try:
-                content = str(content)
-            except Exception:
-                content = ""
+        content = None
+        # Prefer explicit content from m (already filtered); fallback to base variety
+        if "content" in m:
+            content = m.get("content")
+        else:
+            # try to find likely textual fields in original object
+            if isinstance(base, dict):
+                # keep the same priority as _extract_tool_text but don't over-dumps strings
+                for k in ("content", "text", "result", "message", "msg"):
+                    if k in base and base.get(k) is not None:
+                        content = base.get(k)
+                        break
 
-        # 对“tool（含遗留 function）消息”尝试从其它字段提取可读文本
-        if role == "tool" and (not content or not content.strip()):
+        # Normalize content to a single string while preserving existing newlines:
+        normalized_content = ""
+        if content is None:
+            normalized_content = ""
+        elif isinstance(content, list):
+            # If already list-of-lines, join preserving explicit line breaks.
+            # Allow items to be either strings or objects (non-strings -> json dumps)
+            parts = []
+            for it in content:
+                if isinstance(it, str):
+                    parts.append(it)
+                else:
+                    parts.append(_json_dumps_safe(it))
+            normalized_content = "\n".join(parts)
+        elif isinstance(content, dict):
+            # dict -> json string (no ascii escape)
+            normalized_content = _json_dumps_safe(content)
+        else:
+            # it's a scalar (likely string or number)
+            try:
+                normalized_content = str(content)
+            except Exception:
+                normalized_content = ""
+
+        # 保守反转义：仅当内容看起来是“字面转义的 ASCII 文本”时再处理；
+        # 且对 tool 消息一律跳过（避免破坏代码/二进制）
+        if role != "tool" and _looks_like_literal_escapes(normalized_content):
+            try:
+                # 只做一次 unicode_escape 解码（不再先 .encode('utf-8')）
+                candidate = codecs.decode(normalized_content, "unicode_escape")
+                # 要求至少出现真实换行，避免把正常文本搞坏
+                if "\n" in candidate or "\r\n" in candidate or "\t" in candidate:
+                    normalized_content = candidate
+                else:
+                    normalized_content = (
+                        normalized_content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+                    )
+            except Exception:
+                normalized_content = (
+                    normalized_content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+                )
+
+        # Now we have normalized_content with real '\n' where appropriate. Do NOT strip or remove newlines.
+        # 对“tool（含遗留 function）消息”尝试从其它字段提取可读文本（仅在 content 为空时）
+        if role == "tool" and (not normalized_content or not normalized_content.strip()):
             extracted = _extract_tool_text(base) if isinstance(base, dict) else ""
-            content = extracted or ""
+            if extracted:
+                # _extract_tool_text returns joined parts with "\n" already
+                normalized_content = extracted
 
         # 对“assistant 且包含 tool_calls”的消息，允许没有 content（多数模型就是空 content）
         if not (role == "assistant" and m.get("tool_calls")):
             # 其它角色一律写回 content
-            m["content"] = content
+            m["content"] = normalized_content
 
         # -------- 为 tool 消息确保 tool_call_id 配对 --------
         if role == "tool":
             tcid = m.get("tool_call_id")
             if not isinstance(tcid, str) or not tcid:
-                # 按顺序分配上一个 assistant.tool_calls 的 id
                 if pending_tool_ids:
                     assigned = pending_tool_ids.pop(0)
                     m["tool_call_id"] = assigned
@@ -2637,8 +2639,6 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
                 del m[k]
 
         # -------- 丢弃纯空消息（除 system 外）--------
-        # - system 允许空（有时只作为指令容器）
-        # - user/assistant/tool 若全空且无 tool_calls/无 name/无 tool_call_id，直接丢弃
         is_meaningless = (
             (role != "system")
             and (not m.get("content", "") or not m.get("content", "").strip())
@@ -2649,7 +2649,7 @@ def sanitize_messages_for_openai(history: List[Dict[str, Any]]) -> List[Dict[str
             logger.debug(f"[sanitize] drop empty message at idx={idx}, role={role}")
             continue
 
-        # 记录 debug
+        # 记录 debug（保持原来的调试输出）
         if (m.get("content", "") or "") == "":
             logger.debug(f"[sanitize] empty content kept at idx={idx}, role={role}")
 
@@ -2684,7 +2684,7 @@ class LLM:
         self.model = model
         self.base_url = base_url
         self.chat_count = 0
-        self.max_tokens: int | None = None  # 添加最大token数限制（用于限制输出tokens）
+        self.max_tokens: int | None = None
         self.task_id = task_id
 
     async def chat(
@@ -2697,24 +2697,20 @@ class LLM:
         top_p: float | None = None,
         agent_name: AgentType | str = AgentType.SYSTEM,
         sub_title: str | None = None,
-    ) -> str:
+        publish: bool = True,  # 关键新增：是否发布到 Redis/WebSocket
+    ) -> object:  # 返回 ModelResponse
         logger.info(f"subtitle是:{sub_title}")
 
-        # 1) 验证 & 修复工具调用完整性
+        # 1) 工具配对修复 + 截断 + system后首条user
         if history:
             history = self._validate_and_fix_tool_calls(history)
-
-        # 2) 截断上下文（按 token 限制，保留系统消息 + 最近对话尾部）
-        if history:
             history = self._truncate_history_by_tokens(history, CONTEXT_TOKEN_HARD_LIMIT)
-
-        # 2.5) **关键新增**：强制保证 system 后紧跟 user
-        if history:
             history = self._ensure_first_after_system_user(history)
 
-        # 3) 最后一跳：消息清洗（强制保证 content 为字符串等）
+        # 2) 最后一跳清洗
         safe_messages = sanitize_messages_for_openai(history or [])
 
+        # 3) 组装请求参数
         kwargs = {
             "api_key": self.api_key,
             "model": self.model,
@@ -2725,18 +2721,16 @@ class LLM:
             "request_timeout": REQUEST_TIMEOUT,
             "client_args": {"timeout": HTTPX_TIMEOUTS},
         }
-
         if tools:
             kwargs["tools"] = tools
             if tool_choice is not None:
                 kwargs["tool_choice"] = tool_choice
-
         if self.max_tokens:
             kwargs["max_tokens"] = self.max_tokens
-
         if self.base_url:
             kwargs["base_url"] = self.base_url
 
+        # 4) 调用 + 重试
         for attempt in range(max_retries):
             try:
                 response = await acompletion(**kwargs)
@@ -2745,26 +2739,23 @@ class LLM:
                 if not response or not hasattr(response, "choices"):
                     raise ValueError("无效的API响应")
 
-                self.chat_count += 1
-                await self.send_message(response, agent_name, sub_title)
+                # 仅在 publish=True 时，才入库并广播
+                if publish:
+                    self.chat_count += 1
+                    await self.send_message(response, agent_name, sub_title)
+
                 return response
 
             except asyncio.CancelledError:
                 logger.warning("请求被上层取消（CancelledError），不重试。")
                 raise
-
-            except (
-                litellm.BadRequestError,
-                litellm.AuthenticationError,
-                litellm.NotFoundError,
-            ) as e:
+            except (litellm.BadRequestError, litellm.AuthenticationError, litellm.NotFoundError) as e:
                 msg = str(e)
                 if "maximum context length" in msg or "context length" in msg or "ContextWindowExceeded" in msg:
                     logger.error("非重试错误：上下文超限，请确保在进入 acompletion 前已充分截断。")
                 else:
                     logger.error(f"非重试错误：{e}")
                 raise
-
             except (
                 litellm.RateLimitError,
                 litellm.Timeout,
@@ -2778,7 +2769,6 @@ class LLM:
                     raise
                 delay = retry_delay * (2**attempt) + random.random() * 0.3
                 await asyncio.sleep(delay)
-
             except Exception as e:
                 logger.error(f"第 {attempt + 1}/{max_retries} 次重试（未知异常）: {e}")
                 if attempt >= max_retries - 1:
@@ -2892,8 +2882,6 @@ class LLM:
 
         return fixed_history
 
-
-
     def _truncate_history_by_tokens(self, history: list, token_limit: int) -> list:
         """
         按 token 数量裁剪 messages（保留首条 system + 尾部若干条）。
@@ -2944,9 +2932,9 @@ class LLM:
 
     async def send_message(self, response, agent_name, sub_title=None):
         logger.info(f"subtitle是:{sub_title}")
-        raw_content = response.choices[0].message.content or ""
+        raw_content = getattr(response.choices[0].message, "content", "") or ""
 
-        # 允许上游传字符串（如 "JsonFixerHeavy"），在此归一化为 AgentType
+        # 字符串 -> AgentType 的归一化（保持你现有逻辑）
         if isinstance(agent_name, str):
             key = agent_name.lower().replace(" ", "")
             mapping = {
@@ -2969,66 +2957,38 @@ class LLM:
                 )
             )
 
-        # ------- 仅对 Coordinator / Modeler 做 JSON 规范化（右侧面板要吃干净 JSON）-------
-        def _cleanup_fences(s: str) -> str:
-            return (s or "").replace("```json", "").replace("```", "").strip()
-
-        def _cleanup_ctrl(s: str) -> str:
-            return re.sub(r"[\x00-\x1F\x7F]", "", s or "")
-
-        def _extract_first_json_block(s: str) -> str:
-            if not s:
-                return ""
-            start = s.find("{")
-            if start == -1:
-                return ""
-            stack, in_str, esc = [], False, False
-            for i, ch in enumerate(s[start:], start):
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif ch == "\\":
-                        esc = True
-                    elif ch == '"':
-                        in_str = False
-                else:
-                    if ch == '"':
-                        in_str = True
-                    elif ch == "{":
-                        stack.append("{")
-                    elif ch == "}":
-                        if stack:
-                            stack.pop()
-                        if not stack:
-                            return s[start : i + 1]
-            return ""
-
-        def _normalize_json_for_right_panel(text: str):
-            # 返回 (ok, normalized_text)
-            cleaned = _cleanup_ctrl(_cleanup_fences(text))
-            blk = _extract_first_json_block(cleaned)
-            if not blk:
-                return False, text
-            try:
-                obj = json.loads(blk)
-                return True, json.dumps(obj, ensure_ascii=False)
-            except Exception:
-                return False, text
-
+        # ------- 对 Coordinator / Modeler 做严格 JSON 规范化（右侧面板要吃干净 JSON） -------
         content_to_send = raw_content
-        if agent_name in (AgentType.COORDINATOR, AgentType.MODELER):
-            ok, normalized = _normalize_json_for_right_panel(raw_content)
-            if ok:
-                content_to_send = normalized
-            else:
-                logger.warning("send_message: 未能从原文中提取合法 JSON，按原文发布。")
 
-        # ------- 构造并发布对应消息 -------
+        if agent_name in (AgentType.COORDINATOR, AgentType.MODELER):
+            stripped = TS.strip_fences_outer_or_all(raw_content)
+            try:
+                # 关键：把 llm=self 交给 JsonFixer，由它内部用 publish=False 调 self.chat
+                obj, stage = await JsonFixer.fix_and_parse(
+                    stripped,
+                    llm=self,
+                    agent_name=f"{getattr(agent_name, 'name', str(agent_name))}.JsonFixer",
+                )
+            except Exception as e:
+                logger.exception(f"JsonFixer 调用失败: {e}")
+                err_obj = {"error": "jsonfixer_exception", "exc": str(e)}
+                content_to_send = json.dumps(err_obj, ensure_ascii=False)
+            else:
+                if isinstance(obj, dict):
+                    # 成功：发布纯 JSON 字符串（仅一层序列化），不要再包 ```json 围栏
+                    content_to_send = json.dumps(obj, ensure_ascii=False)
+                else:
+                    # 解析失败：发布结构化错误对象（避免把脏原文再次传回引起循环）
+                    preview = (stripped[:600] + "…") if len(stripped) > 600 else stripped
+                    err_obj = {"error": "json_unparseable", "stage": stage, "raw_preview": preview}
+                    content_to_send = json.dumps(err_obj, ensure_ascii=False)
+                    logger.warning(f"send_message: JSON 解析失败 stage={stage}; 已发布错误对象供上游处理.")
+
+        # 发布给前端（保持原有分支）
         match agent_name:
             case AgentType.CODER:
                 agent_msg: CoderMessage = CoderMessage(content=content_to_send)
             case AgentType.WRITER:
-                # 处理 Markdown 图片/脚注
                 c, _ = split_footnotes(content_to_send)
                 c = transform_link(self.task_id, c)
                 agent_msg: WriterMessage = WriterMessage(content=c, sub_title=sub_title)
@@ -3224,7 +3184,7 @@ async def simple_chat(model: LLM, history: list) -> str:
 
     # 多轮仍超限：退而求其次 —— 仅保留 system + 极短摘要（仍为 user）
     try:
-        minimal_summary = await summarize_chunk(body[:100])
+        minimal_summary = await summarize_chunk(body[:200])
     except Exception:
         minimal_summary = "（超长上下文，已压缩为极短摘要。）"
 
@@ -3251,6 +3211,8 @@ async def simple_chat(model: LLM, history: list) -> str:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\core\llm\llm_factory.py 的内容:
 ================================================================================
+# app/core/llm/llm_factory.py
+
 from app.config.setting import settings
 from app.core.llm.llm import LLM
 
@@ -3296,6 +3258,8 @@ class LLMFactory:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\models\user_output.py 的内容:
 ================================================================================
+# app/models/user_output.py
+
 import os
 import re
 from app.utils.data_recorder import DataRecorder
@@ -3305,9 +3269,7 @@ import uuid
 
 
 class UserOutput:
-    def __init__(
-        self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None
-    ):
+    def __init__(self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None):
         self.work_dir = work_dir
         # 存储各小节结果：{ key: {"response_content": str, "footnotes": list[str]} }
         self.res: dict[str, dict] = {}
@@ -3323,15 +3285,15 @@ class UserOutput:
         """按论文结构定义章节顺序；用于最终拼接"""
         ques_str = [f"ques{i}" for i in range(1, self.ques_count + 1)]
         self.seq = [
-            "firstPage",              # 标题、摘要、关键词
-            "RepeatQues",             # 一、问题重述
-            "analysisQues",           # 二、问题分析
-            "modelAssumption",        # 三、模型假设
-            "symbol",                 # 四、符号说明
-            "eda",                    # 数据预处理（EDA）
-            *ques_str,                # 模型建立与求解（问题1,2,...）
-            "sensitivity_analysis",   # 模型分析与检验
-            "judge",                  # 模型评价、改进与推广
+            "firstPage",  # 标题、摘要、关键词
+            "RepeatQues",  # 一、问题重述
+            "analysisQues",  # 二、问题分析
+            "modelAssumption",  # 三、模型假设
+            "symbol",  # 四、符号说明
+            "eda",  # 数据预处理（EDA）
+            *ques_str,  # 模型建立与求解（问题1,2,...）
+            "sensitivity_analysis",  # 模型分析与检验
+            "judge",  # 模型评价、改进与推广
         ]
 
     def set_res(self, key: str, writer_response: WriterResponse):
@@ -3340,7 +3302,7 @@ class UserOutput:
             # 容错：允许传入兼容结构的字典
             try:
                 rc = (writer_response or {}).get("response_content", "")  # type: ignore
-                fn = (writer_response or {}).get("footnotes", [])        # type: ignore
+                fn = (writer_response or {}).get("footnotes", [])  # type: ignore
             except Exception:
                 rc, fn = "", []
         else:
@@ -3381,6 +3343,7 @@ class UserOutput:
 
         # 匹配 {[^数字]: 引用内容}，允许跨行
         pattern = re.compile(r"\{\[\^(\d+)\]:\s*(.*?)\}", re.DOTALL)
+
         def _find_existing_uuid(content: str) -> str | None:
             for u, data in self.footnotes.items():
                 if data.get("content") == content:
@@ -3488,6 +3451,8 @@ class UserOutput:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\routers\common_router.py 的内容:
 ================================================================================
+# app/router/common_router.py
+
 from fastapi import APIRouter
 from app.config.setting import settings
 from app.utils.common_utils import get_config_template
@@ -3530,6 +3495,8 @@ async def track(task_id: str):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\routers\files_router.py 的内容:
 ================================================================================
+# app/router/files_router.py
+
 from fastapi import APIRouter
 from app.utils.common_utils import get_current_files, get_work_dir
 import os
@@ -3568,6 +3535,8 @@ async def open_folder(task_id: str):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\routers\modeling_router.py 的内容:
 ================================================================================
+# app/router/modeling_router.py
+
 from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.enums import CompTemplate, FormatOutPut
@@ -3817,6 +3786,8 @@ async def run_modeling_task_async(
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\routers\ws_router.py 的内容:
 ================================================================================
+# app/router/ws_router.py
+
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage
@@ -3840,7 +3811,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
 
     # 建立 WebSocket 连接
     await ws_manager.connect(websocket)
-    websocket.timeout = 600
+    websocket.timeout = 6000
     print(f"WebSocket connection status: {websocket.client}")
 
     # 订阅 Redis 频道
@@ -3864,9 +3835,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                         print(f"Sent message to WebSocket: {msg_dict}")
                     except Exception as e:
                         print(f"Error parsing message: {e}")
-                        await ws_manager.send_personal_message_json(
-                            {"error": str(e)}, websocket
-                        )
+                        await ws_manager.send_personal_message_json({"error": str(e)}, websocket)
                 await asyncio.sleep(0.1)
 
             except WebSocketDisconnect:
@@ -3888,6 +3857,8 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\schemas\A2A.py 的内容:
 ================================================================================
+# app/schemas/A2A.py
+
 from pydantic import BaseModel
 from typing import Any
 
@@ -3915,11 +3886,14 @@ class WriterResponse(BaseModel):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\schemas\base.py 的内容:
 ================================================================================
+# app/schemas/base.py
 
 
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\schemas\enums.py 的内容:
 ================================================================================
+# app/schemas/enums.py
+
 from enum import Enum
 
 
@@ -3952,6 +3926,8 @@ class AgentStatus(str, Enum):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\schemas\request.py 的内容:
 ================================================================================
+# app/schemas/request.py
+
 from pydantic import BaseModel
 from app.schemas.enums import CompTemplate, FormatOutPut
 
@@ -3977,7 +3953,9 @@ class Problem(BaseModel):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\schemas\response.py 的内容:
 ================================================================================
-from typing import Literal, Union
+# app/schemas/response.py
+
+from typing import Literal, Union, Any
 from app.schemas.enums import AgentType
 from pydantic import BaseModel, Field
 from uuid import uuid4
@@ -3985,10 +3963,9 @@ from uuid import uuid4
 
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
-    msg_type: Literal[
-        "system", "agent", "user", "tool"
-    ]  # system msg | agent message | user message | tool message
-    content: str | None = None
+    msg_type: Literal["system", "agent", "user", "tool"]  # system msg | agent message | user message | tool message
+    # 允许结构化内容：dict/list/str 等
+    content: Any = None
 
 
 class ToolMessage(Message):
@@ -4097,6 +4074,8 @@ MessageType = Union[
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\schemas\tool_result.py 的内容:
 ================================================================================
+# app/schemas/tool_result.py
+
 from pydantic import BaseModel
 from typing import Any, Optional
 
@@ -4110,85 +4089,107 @@ class ToolResult(BaseModel):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\services\redis_manager.py 的内容:
 ================================================================================
+# app/services/redis_manager.py
+
 import redis.asyncio as aioredis
 from typing import Optional, Any, Dict, Union
 import json
 from pathlib import Path
 from app.config.setting import settings
-from app.schemas.response import Message  # 这里是你定义的 Pydantic 模型（v1/v2 皆可）
+from app.schemas.response import Message  # v1/v2 pydantic model
 from app.utils.log_util import logger
 from uuid import uuid4
 
 
-def _to_str_or_empty(v: Any) -> str:
-    """把 None / 非字符串 转成字符串，避免前端/下游被 None 砸到。"""
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
+def _json_safe(obj: Any) -> Any:
+    """
+    递归将对象转换为 JSON 可序列化的结构：
+    - Pydantic v1/v2 -> dict()
+    - dict/list/tuple/set 递归处理（set -> list；tuple -> list）
+    - bytes -> utf-8 解码失败则转十六进制字符串
+    - 其余不可序列化对象 -> str(obj)
+    """
+    # 原生可序列化类型
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+
+    # Pydantic v2/v1
+    if hasattr(obj, "model_dump") and callable(obj.model_dump):
+        try:
+            return _json_safe(obj.model_dump())
+        except Exception:
+            pass
+    if hasattr(obj, "dict") and callable(obj.dict):
+        try:
+            return _json_safe(obj.dict())
+        except Exception:
+            pass
+
+    # 容器类型
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, set):
+        return [_json_safe(v) for v in obj]
+
+    # bytes
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        try:
+            return bytes(obj).decode("utf-8")
+        except Exception:
+            return bytes(obj).hex()
+
+    # 其他：转字符串兜底
     try:
-        return str(v)
+        return str(obj)
     except Exception:
-        return ""
+        return f"<unserializable:{type(obj).__name__}>"
 
 
 def _normalize_message_payload(message: Union[Message, Dict[str, Any]]) -> Dict[str, Any]:
     """
-    统一清洗消息对象为 JSON-safe dict：
+    统一清洗消息对象为 JSON-safe dict（不强制把 content 变成字符串）：
     1) 支持 Pydantic v1/v2（优先用 model_dump / dict）
     2) 兜底生成 id / msg_type
-    3) content 强制非 None、可序列化
-    4) 避免不可序列化对象破坏 publish/file-save
+    3) 对整个 payload 做 _json_safe，确保可序列化
     """
     # 1) 提取为字典
-    payload: Dict[str, Any]
     if hasattr(message, "model_dump"):  # pydantic v2
-        payload = message.model_dump()
-    elif hasattr(message, "dict"):      # pydantic v1
-        payload = message.dict()
+        raw = message.model_dump()
+    elif hasattr(message, "dict"):  # pydantic v1
+        raw = message.dict()
     elif isinstance(message, dict):
-        payload = dict(message)
+        raw = dict(message)
     else:
         # 极端兜底：未知类型
-        payload = {
+        raw = {
             "id": str(uuid4()),
             "msg_type": "system",
-            "content": _to_str_or_empty(message),
+            "content": f"{message}",
             "type": "warning",
         }
 
     # 2) id / msg_type 兜底
-    if not isinstance(payload.get("id"), str) or not payload.get("id"):
-        payload["id"] = str(uuid4())
-    if not isinstance(payload.get("msg_type"), str) or not payload.get("msg_type"):
-        # 默认按 system 处理，避免前端解析失败
-        payload["msg_type"] = "system"
+    if not isinstance(raw.get("id"), str) or not raw.get("id"):
+        raw["id"] = str(uuid4())
+    if not isinstance(raw.get("msg_type"), str) or not raw.get("msg_type"):
+        raw["msg_type"] = "system"
 
-    # 3) content 兜底（None → ""；复杂结构 → json.dumps 或 str）
-    content = payload.get("content", "")
-    if content is None:
-        content = ""
-    if not isinstance(content, str):
-        try:
-            # 尝试 JSON 序列化（在前端显示时更直观）
-            content = json.dumps(content, ensure_ascii=False)
-        except Exception:
-            content = _to_str_or_empty(content)
-    payload["content"] = content
+    # 3) JSON 安全化（保持 content 的原始结构：str/dict/list…）
+    payload = _json_safe(raw)
 
-    # 4) 最后再尝试把整个 payload 过一遍 JSON 编码，确保无不可序列化对象
-    #    如果失败，就把无法序列化的字段转字符串
+    # 最后校验：如仍不可序列化，逐字段兜底
     try:
         json.dumps(payload, ensure_ascii=False)
     except TypeError:
-        # 逐字段兜底
-        safe_payload = {}
+        safe_payload: Dict[str, Any] = {}
         for k, v in payload.items():
             try:
                 json.dumps({k: v}, ensure_ascii=False)
                 safe_payload[k] = v
             except TypeError:
-                safe_payload[k] = _to_str_or_empty(v)
+                safe_payload[k] = _json_safe(str(v))
         payload = safe_payload
 
     return payload
@@ -4207,7 +4208,7 @@ class RedisManager:
             self._client = aioredis.Redis.from_url(
                 self.redis_url,
                 decode_responses=True,
-                max_connections=settings.REDIS_MAX_CONNECTIONS,
+                max_connections=getattr(settings, "REDIS_MAX_CONNECTIONS", None),
             )
         logger.info(f"Redis 连接建立成功: {self.redis_url}")
         return self._client
@@ -4216,12 +4217,12 @@ class RedisManager:
         """设置Redis键值对"""
         client = await self.get_client()
         await client.set(key, value)
+        # 10 小时过期（保持你原来逻辑）
         await client.expire(key, 36000)
 
     async def _save_message_to_file(self, task_id: str, message: Union[Message, Dict[str, Any]]):
         """将消息保存到文件中，同一任务的消息保存在同一个文件中"""
         try:
-            # 统一清洗
             payload = _normalize_message_payload(message)
 
             # 确保目录存在
@@ -4237,7 +4238,6 @@ class RedisManager:
                     try:
                         messages = json.load(f)
                     except Exception:
-                        # 文件损坏等极端情况，重置
                         messages = []
 
             # 添加新消息
@@ -4250,27 +4250,44 @@ class RedisManager:
             logger.debug(f"消息已追加到文件: {file_path}")
         except Exception as e:
             logger.error(f"保存消息到文件失败: {str(e)}")
-            # 不抛出异常，确保主流程不受影响
+            # 不抛异常，保证主流程不受影响
 
     async def publish_message(self, task_id: str, message: Union[Message, Dict[str, Any]]):
-        """发布消息到特定任务的频道并保存到文件"""
+        """
+        发布消息到特定任务的频道并保存到文件
+        - 仅对“最外层 payload”序列化一次
+        - 不再把 payload['content'] 强制转为字符串
+        """
         client = await self.get_client()
         channel = f"task:{task_id}:messages"
+        payload = _normalize_message_payload(message)
         try:
-            # —— 统一清洗，避免 content=None / 不可序列化字段 ——
-            payload = _normalize_message_payload(message)
-            message_json = json.dumps(payload, ensure_ascii=False)
+            # 构造预览字符串（不改变 content 原类型）
+            try:
+                content_preview = (
+                    payload.get("content", "")
+                    if isinstance(payload.get("content", ""), str)
+                    else json.dumps(payload.get("content", ""), ensure_ascii=False)
+                )
+            except Exception:
+                content_preview = "<preview 生成失败>"
 
-            await client.publish(channel, message_json)
-            logger.debug(
-                f"消息已发布到频道 {channel}:mes_type:{payload.get('msg_type')}:" 
-                f"msg_content:{(payload.get('content') or '')[:200]}"
+            # 仅序列化一层
+            message_json = json.dumps(payload, ensure_ascii=False)
+            publish_result = await client.publish(channel, message_json)
+            logger.info(
+                f"发布到频道 {channel} 成功，订阅者数量: {publish_result}. "
+                f"msg_type:{payload.get('msg_type')} "
+                f"content_preview:{str(content_preview)[:200]}"
             )
 
-            # 保存消息到文件（同样使用清洗后的 payload）
+            # 落盘
             await self._save_message_to_file(task_id, payload)
+
+            return publish_result
+
         except Exception as e:
-            logger.error(f"发布消息失败: {str(e)}")
+            logger.exception(f"发布消息失败: task_id={task_id} channel={channel} error={e}")
             raise
 
     async def subscribe_to_task(self, task_id: str):
@@ -4287,12 +4304,15 @@ class RedisManager:
             self._client = None
 
 
+# singleton
 redis_manager = RedisManager()
 
 
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\services\ws_manager.py 的内容:
 ================================================================================
+# app/services/ws_manager.py
+
 from fastapi import WebSocket
 
 
@@ -4324,6 +4344,8 @@ ws_manager = WebSocketManager()
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tests\get_config_template.py 的内容:
 ================================================================================
+# app/tests/get_config_template.py
+
 import sys
 import os
 
@@ -4347,6 +4369,8 @@ if __name__ == "__main__":
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tests\test_common_utils.py 的内容:
 ================================================================================
+# app/tests/test_common_utils.py
+
 import unittest
 
 from app.utils.common_utils import split_footnotes
@@ -4367,6 +4391,8 @@ if __name__ == "__main__":
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tests\test_e2b.py 的内容:
 ================================================================================
+# app/tests/test_e2b.py
+
 import os
 import asyncio
 import unittest
@@ -4380,15 +4406,16 @@ from app.utils.common_utils import create_work_dir
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:  # Fallback if python-dotenv is not installed
+
     def load_dotenv(*args, **kwargs):
         return None
+
 
 try:
     from app.tools.e2b_interpreter import E2BCodeInterpreter
 except ModuleNotFoundError:
     E2BCodeInterpreter = None
 from app.utils.common_utils import create_task_id, create_work_dir
-
 
 
 class TestE2BCodeInterpreter(unittest.TestCase):
@@ -4400,9 +4427,7 @@ class TestE2BCodeInterpreter(unittest.TestCase):
         _, dirs = create_work_dir("20250312-104132-d3625cab")
         notebook = NotebookSerializer(dirs["jupyter"])
 
-        self.code_interpreter = E2BCodeInterpreter(
-            self.task_id, self.work_dir, notebook
-        )
+        self.code_interpreter = E2BCodeInterpreter(self.task_id, self.work_dir, notebook)
 
     def test_execute_code(self):
         if not os.getenv("E2B_API_KEY"):
@@ -4436,10 +4461,11 @@ plt.show()
         asyncio.run(self.code_interpreter.execute_code(code))
 
 
-
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\base.py 的内容:
 ================================================================================
+# app/tools/base.py
+
 from typing import Dict, Any, List, Callable
 import inspect
 from app.schemas.tool_result import ToolResult
@@ -4524,10 +4550,7 @@ class BaseTool:
             Whether the tool exists
         """
         for _, method in inspect.getmembers(self, inspect.ismethod):
-            if (
-                hasattr(method, "_function_name")
-                and method._function_name == function_name
-            ):
+            if hasattr(method, "_function_name") and method._function_name == function_name:
                 return True
         return False
 
@@ -4545,10 +4568,7 @@ class BaseTool:
             ValueError: Raised when tool doesn't exist
         """
         for _, method in inspect.getmembers(self, inspect.ismethod):
-            if (
-                hasattr(method, "_function_name")
-                and method._function_name == function_name
-            ):
+            if hasattr(method, "_function_name") and method._function_name == function_name:
                 return await method(**kwargs)
 
         raise ValueError(f"Tool '{function_name}' not found")
@@ -4557,8 +4577,11 @@ class BaseTool:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\base_interpreter.py 的内容:
 ================================================================================
+# app/tools/base_interpreter.py
+
 import abc
 import re
+import json
 from app.tools.notebook_serializer import NotebookSerializer
 from app.services.redis_manager import redis_manager
 from app.utils.log_util import logger
@@ -4612,7 +4635,6 @@ class BaseCodeInterpreter(abc.ABC):
         agent_msg = InterpreterMessage(
             output=content_to_display,
         )
-        logger.debug(f"发送消息: {agent_msg.model_dump_json()}")
         await redis_manager.publish_message(
             self.task_id,
             agent_msg,
@@ -4649,6 +4671,8 @@ class BaseCodeInterpreter(abc.ABC):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\e2b_interpreter.py 的内容:
 ================================================================================
+# app/tools/e2b_interpreter.py
+
 import os
 from e2b_code_interpreter import AsyncSandbox
 from app.schemas.response import (
@@ -4691,9 +4715,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
     async def initialize(self, timeout: int = 3000):
         """异步初始化沙箱环境"""
         try:
-            self.sbx = await AsyncSandbox.create(
-                api_key=settings.E2B_API_KEY, timeout=timeout
-            )
+            self.sbx = await AsyncSandbox.create(api_key=settings.E2B_API_KEY, timeout=timeout)
             logger.info("沙箱环境初始化成功")
             await self._pre_execute_code()
             await self._upload_all_files()
@@ -4709,9 +4731,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 logger.error(f"工作目录不存在: {self.work_dir}")
                 raise FileNotFoundError(f"工作目录不存在: {self.work_dir}")
 
-            files = [
-                f for f in os.listdir(self.work_dir) if f.endswith((".csv", ".xlsx"))
-            ]
+            files = [f for f in os.listdir(self.work_dir) if f.endswith((".csv", ".xlsx"))]
             logger.info(f"工作目录中的文件列表: {files}")
 
             for file in files:
@@ -4790,9 +4810,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 stdout_str = self._truncate_text(stdout_str)
                 logger.info(f"标准输出: {stdout_str}")
                 text_to_gpt.append(stdout_str)
-                content_to_display.append(
-                    StdOutModel(msg="\n".join(execution.logs.stdout))
-                )
+                content_to_display.append(StdOutModel(msg="\n".join(execution.logs.stdout)))
                 self.notebook_serializer.add_code_cell_output_to_notebook(stdout_str)
 
             if execution.logs.stderr:
@@ -4800,25 +4818,17 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 stderr_str = self._truncate_text(stderr_str)
                 logger.warning(f"标准错误: {stderr_str}")
                 text_to_gpt.append(stderr_str)
-                content_to_display.append(
-                    StdErrModel(msg="\n".join(execution.logs.stderr))
-                )
+                content_to_display.append(StdErrModel(msg="\n".join(execution.logs.stderr)))
 
             # 处理执行结果
         if execution.results:
             for result in execution.results:
                 # 1. 文本格式
                 if str(result):
-                    content_to_display.append(
-                        ResultModel(type="result", format="text", msg=str(result))
-                    )
+                    content_to_display.append(ResultModel(type="result", format="text", msg=str(result)))
                 # 2. HTML格式
                 if result._repr_html_():
-                    content_to_display.append(
-                        ResultModel(
-                            type="result", format="html", msg=result._repr_html_()
-                        )
-                    )
+                    content_to_display.append(ResultModel(type="result", format="html", msg=result._repr_html_()))
                 # 3. Markdown格式
                 if result._repr_markdown_():
                     content_to_display.append(
@@ -4830,46 +4840,26 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                     )
                 # 4. PNG图片（base64字符串，前端可直接渲染）
                 if result._repr_png_():
-                    content_to_display.append(
-                        ResultModel(
-                            type="result", format="png", msg=result._repr_png_()
-                        )
-                    )
+                    content_to_display.append(ResultModel(type="result", format="png", msg=result._repr_png_()))
                 # 5. JPEG图片
                 if result._repr_jpeg_():
-                    content_to_display.append(
-                        ResultModel(
-                            type="result", format="jpeg", msg=result._repr_jpeg_()
-                        )
-                    )
+                    content_to_display.append(ResultModel(type="result", format="jpeg", msg=result._repr_jpeg_()))
                 # 6. SVG
                 if result._repr_svg_():
-                    content_to_display.append(
-                        ResultModel(
-                            type="result", format="svg", msg=result._repr_svg_()
-                        )
-                    )
+                    content_to_display.append(ResultModel(type="result", format="svg", msg=result._repr_svg_()))
                 # 7. PDF
                 if result._repr_pdf_():
-                    content_to_display.append(
-                        ResultModel(
-                            type="result", format="pdf", msg=result._repr_pdf_()
-                        )
-                    )
+                    content_to_display.append(ResultModel(type="result", format="pdf", msg=result._repr_pdf_()))
                 # 8. LaTeX
                 if result._repr_latex_():
-                    content_to_display.append(
-                        ResultModel(
-                            type="result", format="latex", msg=result._repr_latex_()
-                        )
-                    )
+                    content_to_display.append(ResultModel(type="result", format="latex", msg=result._repr_latex_()))
                 # 9. JSON
                 if result._repr_json_():
                     content_to_display.append(
                         ResultModel(
                             type="result",
                             format="json",
-                            msg=json.dumps(result._repr_json_()),
+                            msg=json.dumps(result._repr_json_(), ensure_ascii=False),
                         )
                     )
                 # 10. JavaScript
@@ -4896,20 +4886,12 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
         for item in content_to_display:
             if isinstance(item, dict):
                 if item.get("type") in ["stdout", "stderr", "error"]:
-                    text_to_gpt.append(
-                        self._truncate_text(
-                            item.get("content") or item.get("value") or ""
-                        )
-                    )
+                    text_to_gpt.append(self._truncate_text(item.get("content") or item.get("value") or ""))
             elif isinstance(item, ResultModel):
                 if item.format in ["text", "html", "markdown", "json"]:
-                    text_to_gpt.append(
-                        self._truncate_text(f"[{item.format}]\n{item.msg}")
-                    )
+                    text_to_gpt.append(self._truncate_text(f"[{item.format}]\n{item.msg}"))
                 elif item.format in ["png", "jpeg", "svg", "pdf"]:
-                    text_to_gpt.append(
-                        f"[{item.format} 图片已生成，内容为 base64，未展示]"
-                    )
+                    text_to_gpt.append(f"[{item.format} 图片已生成，内容为 base64，未展示]")
 
         logger.info(f"text_to_gpt: {text_to_gpt}")
 
@@ -4945,9 +4927,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                     self.add_section(section)
                     self.section_output[section]["images"].append(file.name)
 
-            self.created_images = list(
-                set(self.section_output[section]["images"]) - set(self.created_images)
-            )
+            self.created_images = list(set(self.section_output[section]["images"]) - set(self.created_images))
             logger.info(f"{section}-获取创建的图片列表: {self.created_images}")
             return self.created_images
         except Exception as e:
@@ -5025,6 +5005,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\interpreter_factory.py 的内容:
 ================================================================================
+# app/tools/interpreter_factory.py
+
 from typing import Literal
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.local_interpreter import LocalCodeInterpreter
@@ -5069,8 +5051,253 @@ async def create_interpreter(
 
 
 ================================================================================
+E:\repo1\MathModelAgent-python\backend\app\tools\json_fixer.py 的内容:
+================================================================================
+# app/tools/json_fixer.py
+
+from __future__ import annotations
+import json
+import re
+from typing import Optional, Tuple, Any, TYPE_CHECKING
+
+from app.tools.text_sanitizer import TextSanitizer as TS
+
+# 只有在类型检查时才导入 LLM，避免运行时循环导入
+if TYPE_CHECKING:
+    from app.core.llm.llm import LLM  # pragma: no cover
+
+JSON_FIXER_SYSTEM_PROMPT = (
+    "你是严格的 JSON 修复器。\n"
+    "要求：\n"
+    "1) 仅输出一个 JSON 对象，不能包含解释或额外文本；\n"
+    "2) 保证是合法 JSON（双引号、转义符正确），能被 Python json.loads 解析；\n"
+    "3) 类型必须是对象（dict），不要数组或多对象。"
+)
+
+
+class JsonFixer:
+    """提取 + 修复 + 解析。一旦失败可用 LLM 重建，再做本地兜底。"""
+
+    @staticmethod
+    def _escape_raw_newlines_in_json_strings(s: str) -> str:
+        """
+        仅把 JSON **字符串字面量内部**的真实换行('\n')和回车('\r')替换为 '\\n'。
+        不影响字符串外部的换行（JSON 语法允许作为空白）。
+        """
+        out = []
+        in_str = False
+        esc = False
+        for ch in s:
+            if in_str:
+                if esc:
+                    # 处理「反斜杠 + 真实换行」为 '\\n'
+                    if ch == "\n" or ch == "\r":
+                        out.append("\\n")
+                    else:
+                        out.append(ch)
+                    esc = False
+                else:
+                    if ch == "\\":
+                        out.append(ch)
+                        esc = True
+                    elif ch == '"':
+                        out.append(ch)
+                        in_str = False
+                    elif ch == "\n" or ch == "\r":
+                        out.append("\\n")
+                    else:
+                        out.append(ch)
+            else:
+                out.append(ch)
+                if ch == '"':
+                    in_str = True
+        return "".join(out)
+
+    @staticmethod
+    def _force_double_backslashes_in_strings(s: str) -> str:
+        r"""
+        兜底策略：在 JSON **字符串字面量内部**，把“单个反斜杠”强制双写成 '\\\\'，
+        但**保留**以下合法 JSON 转义不再重复转义：
+            \"  \\  \/  \b  \f  \n  \r  \t  \uXXXX
+        其余如 \left \right \text \quad \( \) \- 等等，统统变成 \\left \\right ...
+        仅在前置修复与 LLM 修复都失败时才采用。
+        """
+        out = []
+        in_str = False
+        i = 0
+        L = len(s)
+        while i < L:
+            ch = s[i]
+            if not in_str:
+                out.append(ch)
+                if ch == '"':
+                    in_str = True
+                i += 1
+                continue
+
+            # in_str == True
+            if ch == '"':
+                out.append(ch)
+                in_str = False
+                i += 1
+                continue
+
+            if ch != "\\":
+                out.append(ch)
+                i += 1
+                continue
+
+            # ch == "\\"
+            if i + 1 >= L:
+                # 字符串末尾的孤立反斜杠 -> 双写避免非法
+                out.append("\\\\")
+                i += 1
+                continue
+
+            nxt = s[i + 1]
+
+            # 情况 A：双反斜杠开头（表示字面一个反斜杠）
+            if nxt == "\\":
+                # 保留现状（它已经代表字面一个反斜杠）
+                out.append("\\\\")
+                i += 2
+                continue
+
+            # 情况 B：合法 JSON 转义：\" \/ \b \f \n \r \t
+            if nxt in ['"', "/", "b", "f", "n", "r", "t"]:
+                out.append("\\" + nxt)
+                i += 2
+                continue
+
+            # 情况 C：\uXXXX（共 6 个字符）
+            if nxt == "u" and i + 5 < L and re.match(r"u[0-9a-fA-F]{4}", s[i + 1 : i + 6]):
+                out.append(s[i : i + 6])
+                i += 6
+                continue
+
+            # 其它情况：一律强制双写，避免 Invalid \escape
+            out.append("\\\\")
+            out.append(nxt)
+            i += 2
+
+        return "".join(out)
+
+    @staticmethod
+    def _try_parse(json_str: str) -> Optional[Any]:
+        try:
+            return json.loads(json_str)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fallback_regex(json_str: str) -> Optional[Any]:
+        """
+        宽松兜底（顺序重要）：
+        1) 去尾逗号（,} / ,]）
+        2) 单引号 -> 双引号
+        3) **字符串内部**把所有单反斜杠强制双写（保留合法转义不重复）
+        """
+        safe = re.sub(r",\s*}", "}", json_str)
+        safe = re.sub(r",\s*]", "]", safe)
+        safe = safe.replace("'", '"')
+        safe = JsonFixer._force_double_backslashes_in_strings(safe)
+        try:
+            return json.loads(safe)
+        except Exception:
+            return None
+
+    @classmethod
+    def _local_first_pass(cls, raw: str) -> Tuple[Optional[str], str]:
+        """
+        本地第一阶段：清洗围栏/控制字符 → 提取首个 JSON → 修复非法转义
+                   → 处理“行尾反斜杠+换行” → 处理字符串内裸换行
+        返回 (json_str 或 None, 阶段标签)
+        """
+        if not raw:
+            return None, "empty"
+
+        # 1) 清理围栏与控制字符（保留换行/制表）
+        content = TS.strip_fences_outer_or_all(TS.clean_control_chars(raw, keep_whitespace=True))
+
+        # 2) 提取首个配平 JSON（栈法）
+        json_str = TS.extract_first_json_block(content, strip_fences_first=False)
+        if not json_str:
+            return None, "not_found"
+
+        # 3) 修复 JSON 中的非法反斜杠转义（如 LaTeX 的 \text 之类）
+        if hasattr(TS, "fix_invalid_json_escapes"):
+            json_str = TS.fix_invalid_json_escapes(json_str)
+        else:
+            json_str = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", json_str)
+
+        # 3.5) 额外兜底：把“反斜杠+行末换行”直接规范为 \\n，避免行尾反斜杠破坏字符串边界
+        json_str = re.sub(r"\\\r?\n", r"\\n", json_str)
+
+        # 4) 把“字符串内部”的真实换行/回车转为 \\n，避免 json.loads 因为裸换行失败
+        json_str = cls._escape_raw_newlines_in_json_strings(json_str)
+
+        return json_str, "prepared"
+
+    @classmethod
+    async def fix_and_parse(
+        cls,
+        raw: str,
+        llm: Optional["LLM"] = None,
+        agent_name: str = "JsonFixer",
+    ) -> Tuple[Optional[dict], str]:
+        json_str, stage = cls._local_first_pass(raw)
+        if not json_str:
+            return None, f"fail:{stage}"
+
+        # ① 本地直接解析
+        obj = cls._try_parse(json_str)
+        if isinstance(obj, dict):
+            return obj, "parsed"
+
+        # ② 有 LLM → 让模型按严格约束重建（静默，不发布）
+        if llm is not None:
+            fix_history = [
+                {"role": "system", "content": JSON_FIXER_SYSTEM_PROMPT},
+                {"role": "user", "content": json_str},
+            ]
+            fix_resp = await llm.chat(
+                history=fix_history,
+                agent_name="JsonFixerInternal",
+                sub_title="JsonFixer",
+                publish=False,  # 关键：不发布，仅拿返回内容
+            )
+            fixed_raw = getattr(fix_resp.choices[0].message, "content", "") or ""
+            fixed = TS.strip_fences_outer_or_all(fixed_raw)
+            fixed_json = TS.extract_first_json_block(fixed, strip_fences_first=False)
+            if fixed_json:
+                if hasattr(TS, "fix_invalid_json_escapes"):
+                    fixed_json = TS.fix_invalid_json_escapes(fixed_json)
+                else:
+                    fixed_json = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", fixed_json)
+                fixed_json = re.sub(r"\\\r?\n", r"\\n", fixed_json)
+                fixed_json = cls._escape_raw_newlines_in_json_strings(fixed_json)
+
+                obj = cls._try_parse(fixed_json)
+                if isinstance(obj, dict):
+                    return obj, "llm_fixed"
+
+                obj = cls._fallback_regex(fixed_json)
+                if isinstance(obj, dict):
+                    return obj, "llm_fallback_parsed"
+
+        # ③ 无 LLM 或仍失败 → 本地宽松兜底
+        obj = cls._fallback_regex(json_str)
+        if isinstance(obj, dict):
+            return obj, "fallback_parsed"
+
+        return None, "error:unparseable"
+
+
+================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\local_interpreter.py 的内容:
 ================================================================================
+# app/tools/local_interpreter.py
+
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.notebook_serializer import NotebookSerializer
 import jupyter_client
@@ -5100,9 +5327,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         # 本地内核一般不需异步上传文件，直接切换目录即可
         # 初始化 Jupyter 内核管理器和客户端
         logger.info("初始化本地内核")
-        self.km, self.kc = jupyter_client.manager.start_new_kernel(
-            kernel_name="python3"
-        )
+        self.km, self.kc = jupyter_client.manager.start_new_kernel(kernel_name="python3")
         self._pre_execute_code()
 
     def _pre_execute_code(self):
@@ -5154,9 +5379,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             if mark in ("stdout", "execute_result_text", "display_text"):
                 text_to_gpt.append(self._truncate_text(f"[{mark}]\n{out_str}"))
                 #  添加text到notebook
-                content_to_display.append(
-                    ResultModel(type="result", format="text", msg=out_str)
-                )
+                content_to_display.append(ResultModel(type="result", format="text", msg=out_str))
                 self.notebook_serializer.add_code_cell_output_to_notebook(out_str)
 
             elif mark in (
@@ -5171,16 +5394,10 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 #  添加image到notebook
                 if "png" in mark:
                     self.notebook_serializer.add_image_to_notebook(out_str, "image/png")
-                    content_to_display.append(
-                        ResultModel(type="result", format="png", msg=out_str)
-                    )
+                    content_to_display.append(ResultModel(type="result", format="png", msg=out_str))
                 else:
-                    self.notebook_serializer.add_image_to_notebook(
-                        out_str, "image/jpeg"
-                    )
-                    content_to_display.append(
-                        ResultModel(type="result", format="jpeg", msg=out_str)
-                    )
+                    self.notebook_serializer.add_image_to_notebook(out_str, "image/jpeg")
+                    content_to_display.append(ResultModel(type="result", format="jpeg", msg=out_str))
 
             elif mark == "error":
                 error_occurred = True
@@ -5212,10 +5429,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             try:
                 iopub_msg = self.kc.get_iopub_msg(timeout=1)
                 msg_list.append(iopub_msg)
-                if (
-                    iopub_msg["msg_type"] == "status"
-                    and iopub_msg["content"].get("execution_state") == "idle"
-                ):
+                if iopub_msg["msg_type"] == "status" and iopub_msg["content"].get("execution_state") == "idle":
                     break
             except:
                 if self.interrupt_signal:
@@ -5294,9 +5508,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
     def restart_jupyter_kernel(self):
         """Restart the Jupyter kernel and recreate the work directory."""
         self.kc.shutdown()
-        self.km, self.kc = jupyter_client.manager.start_new_kernel(
-            kernel_name="python3"
-        )
+        self.km, self.kc = jupyter_client.manager.start_new_kernel(kernel_name="python3")
         self.interrupt_signal = False
         self._create_work_dir()
 
@@ -5308,6 +5520,8 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\notebook_serializer.py 的内容:
 ================================================================================
+# app/tools/notebook_serializer.py
+
 import nbformat
 from nbformat import v4 as nbf
 import ansi2html
@@ -5377,9 +5591,7 @@ class NotebookSerializer:
                 self.segmentation_output_content[self.current_segmentation] = ""
             self.segmentation_output_content[self.current_segmentation] += html_content
 
-        cell_output = nbf.new_output(
-            output_type="display_data", data={"text/html": html_content}
-        )
+        cell_output = nbf.new_output(output_type="display_data", data={"text/html": html_content})
         self.nb["cells"][-1]["outputs"].append(cell_output)
         self.write_to_notebook()
 
@@ -5394,9 +5606,7 @@ class NotebookSerializer:
         self.write_to_notebook()
 
     def add_image_to_notebook(self, image, mime_type):
-        image_output = nbf.new_output(
-            output_type="display_data", data={mime_type: image}
-        )
+        image_output = nbf.new_output(output_type="display_data", data={mime_type: image})
         self.nb["cells"][-1]["outputs"].append(image_output)
         self.write_to_notebook()
 
@@ -5426,6 +5636,8 @@ class NotebookSerializer:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\tools\openalex_scholar.py 的内容:
 ================================================================================
+# app/tools/openalex_scholar.py
+
 import requests
 from typing import List, Dict, Any, Tuple
 from app.services.redis_manager import redis_manager
@@ -5481,11 +5693,7 @@ class OpenAlexScholar:
         else:
             raise ValueError("配置OpenAlex邮箱获取访问文献权利")
 
-        headers = {
-            "User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})"
-            if self.email
-            else "OpenAlexScholar/1.0"
-        }
+        headers = {"User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})" if self.email else "OpenAlexScholar/1.0"}
 
         try:
             print(f"请求 URL: {base_url} 参数: {params}")
@@ -5516,9 +5724,11 @@ class OpenAlexScholar:
                     author_info = {
                         "name": author.get("display_name"),
                         "position": authorship.get("author_position"),
-                        "institution": authorship.get("institutions", [{}])[0].get("display_name")
-                        if authorship.get("institutions")
-                        else None,
+                        "institution": (
+                            authorship.get("institutions", [{}])[0].get("display_name")
+                            if authorship.get("institutions")
+                            else None
+                        ),
                     }
                     authors.append(author_info)
 
@@ -5633,12 +5843,14 @@ def paper_to_footnote_tuple(paper: Dict[str, Any]) -> Tuple[str, str]:
 E:\repo1\MathModelAgent-python\backend\app\tools\png_paths.py 的内容:
 ================================================================================
 # app/tools/png_paths.py
+
 import os
 from pathlib import Path
 from typing import List
 from app.utils.common_utils import get_work_dir  # 用它拿到 work_dir
 
 KEEP_FOLDERS = ["eda", "sensitivity_analysis"]
+
 
 def collect_png_relative_paths(startpath: str, only_figures: bool = True) -> List[str]:
     """
@@ -5672,6 +5884,7 @@ def collect_png_relative_paths(startpath: str, only_figures: bool = True) -> Lis
     # 排序去重
     return sorted(set(png_paths))
 
+
 def collect_png_paths_by_task(task_id: str, only_figures: bool = True) -> List[str]:
     """给定 task_id，扫描该任务 work_dir 下的 png 相对路径"""
     work_dir = get_work_dir(task_id)  # e.g. project/work_dir/<task_id>
@@ -5679,9 +5892,418 @@ def collect_png_paths_by_task(task_id: str, only_figures: bool = True) -> List[s
 
 
 ================================================================================
+E:\repo1\MathModelAgent-python\backend\app\tools\text_sanitizer.py 的内容:
+================================================================================
+# app/tools/text_sanitizer.py
+
+"""
+TextSanitizer: 统一的文本/代码清洗与正则工具
+- 控制字符/ANSI 清理
+- Markdown 代码栅栏剥离与 JSON 提取
+- 代码执行前规范化
+- tool.arguments 中兜底抽取 code
+- Markdown 图片路径解析与校验
+
+用法示例:
+    from app.tools.text_sanitizer import TextSanitizer as TS
+    code = TS.normalize_for_execution(raw_text, language="python")
+"""
+
+from __future__ import annotations
+import json
+import re
+import textwrap
+from typing import List, Tuple
+
+
+class TextSanitizer:
+    # -----------------------
+    # 编译好的正则常量（与项目中原先使用的保持语义等价）
+    # -----------------------
+    # 控制字符清理（严格：去掉 0x00–0x1F 和 DEL；保留/不保留换行/制表可选）
+    CLEAN_CTRL_STRICT_RE = re.compile(r"[\x00-\x1F\x7F]")
+    # 宽松：保留 \t(\x09), \n(\x0A), \r(\x0D)
+    CLEAN_CTRL_RELAXED_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]")
+
+    # ANSI 颜色控制序列（与原 delete_color_control_char 的正则等价）
+    ANSI_ESCAPE_RE = re.compile(r"(?:\x9B|\x1B\[)[0-?]*[ -\/]*[@-~]")
+
+    # Markdown 代码栅栏
+    # 匹配整段被单个 fence 包裹的情况（优先提取内部）
+    CODE_FENCE_OUTER_RE = re.compile(r"^\s*```(?:\s*[^\n`]*)?\s*\n(.*)\n```\s*$", re.S)
+    # 匹配文本中所有 fenced blocks（提取内部）
+    CODE_FENCE_ALL_RE = re.compile(r"```(?:\s*[^\n`]*)?\n(.*?)```", re.S)
+
+    # REPL/Notebook 提示符
+    PY_REPL_PROMPT_RE = re.compile(r"^\s*>>>\s?", re.M)
+    NB_IN_PROMPT_RE = re.compile(r"^\s*In\[\d+\]:\s?", re.M)
+
+    # tool.arguments 解析辅助
+    # 支持转义字符的 "code": "...." 捕获
+    QUOTED_CODE_RE = re.compile(r'"code"\s*:\s*"((?:\\.|[^"\\])*)"', re.S)
+    # 单行键值对 style: code: something（忽略大小写，行首）
+    CODE_KV_LINE_RE = re.compile(r"^\s*code\s*:\s*([^\n\r]+)", re.I | re.M)
+
+    # 图片路径前缀规则（quesN/figures/）
+    QUES_FIG_PREFIX_RE = re.compile(r"^ques\d+/figures/")
+
+    # -----------------------
+    # 基础清理
+    # -----------------------
+    @classmethod
+    def clean_control_chars(cls, s: str, keep_whitespace: bool = True) -> str:
+        """
+        去除会导致解析/展示问题的控制字符。
+        keep_whitespace=True 时保留 \t \n \r，False 时与严格模式一致。
+        返回空字符串而非 None。
+        """
+        if s is None:
+            return ""
+        # 选择松/严格正则
+        re_obj = cls.CLEAN_CTRL_RELAXED_RE if keep_whitespace else cls.CLEAN_CTRL_STRICT_RE
+        return re_obj.sub("", s)
+
+    @classmethod
+    def strip_ansi(cls, s: str) -> str:
+        """去除 ANSI 颜色控制序列（escape sequences）"""
+        if s is None:
+            return ""
+        return cls.ANSI_ESCAPE_RE.sub("", s)
+
+    # -----------------------
+    # 代码栅栏 / JSON 提取
+    # -----------------------
+    @classmethod
+    def strip_fences_outer_or_all(cls, s: str) -> str:
+        """
+        更稳健地剥离 Markdown 代码栅栏：
+        1) 若整段被单个 fence 包裹，优先去掉外层并返回内部（保留内部原样）；
+        2) 否则把文中所有 fence 去掉围栏、保留内部内容（非贪婪匹配）。
+        返回去围栏后的字符串（strip 后）。
+        """
+        if not s:
+            return ""
+        s = s.strip()
+        m = cls.CODE_FENCE_OUTER_RE.match(s)
+        if m:
+            return m.group(1).strip()
+        # 若不是完全包裹情况，尽量把所有 fence 的围栏剥离，保留内部文本
+        return cls.CODE_FENCE_ALL_RE.sub(r"\1", s).strip()
+
+    @classmethod
+    def extract_first_json_block(cls, s: str, strip_fences_first: bool = True) -> str:
+        """
+        用“栈法”提取首个配平的 JSON 对象字符串（比简单正则更稳健）。
+        """
+        if not s:
+            return ""
+        text = cls.strip_fences_outer_or_all(s) if strip_fences_first else s
+        start = text.find("{")
+        if start == -1:
+            return ""
+        stack: List[str] = []
+        in_str = False
+        esc = False
+        for i, ch in enumerate(text[start:], start):
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    stack.append("{")
+                elif ch == "}":
+                    if stack:
+                        stack.pop()
+                    if not stack:
+                        return text[start : i + 1]
+        # 未闭合，返回空（调用方可能决定如何 fallback）
+        return ""
+
+    @classmethod
+    def fix_invalid_json_escapes(cls, s: str) -> str:
+        """
+        把 JSON 字符串里所有“非法转义”的单反斜杠补成双反斜杠。
+        合法转义仅包括: \", \\, \\/, \b, \f, \n, \r, \t, \\uXXXX
+        其它一律加一杠，避免 json.loads 报 Invalid \\escape。
+        """
+        if not isinstance(s, str) or not s:
+            return ""
+        return re.sub(r"\\(?![\"\\/bfnrtu])", r"\\\\", s)
+
+    @classmethod
+    def normalize_common_glitches(cls, s: str) -> str:
+        """
+        对常见的小毛病做修复：
+        - '"qu es2"' -> '"ques2"'
+        - '" ques  3 "' -> '"ques3"'
+        - 同时剥离围栏
+        """
+        if not s:
+            return ""
+        s = cls.strip_fences_outer_or_all(s)
+        # "qu es2" -> "ques2"
+        s = re.sub(r'"qu\s+es(\d+)"', r'"ques\1"', s)
+        # '" ques  3 "' 或者 '"ques 3"' 等 -> "ques3"
+        s = re.sub(r'"\s*ques\s*(\d+)\s*"', r'"ques\1"', s)
+        return s.strip()
+
+    # -----------------------
+    # 代码执行前规范化（与原项目行为等价）
+    # -----------------------
+    @classmethod
+    def normalize_for_execution(cls, raw: str, language: str = "python") -> str:
+        """
+        将 raw 文本规范化为可直接执行的多行字符串（以 '\n' 结尾）。
+        策略（保守）：
+        - 优先抽取 fenced code（如果存在）
+        - 规范换行 CRLF/CR -> LF
+        - 仅在没有真实换行但存在字面 '\\n' 时保守转换为真实换行
+        - 去除常见 REPL/Notebook 提示符（>>> / In[n]:）
+        - textwrap.dedent + 去首尾空行，保证以单个换行结尾
+        """
+        if raw is None:
+            return "\n"
+        if not isinstance(raw, str):
+            raw = str(raw)
+
+        txt = raw
+
+        # 1) 优先提取 fenced code 中的内容
+        txt = cls.strip_fences_outer_or_all(txt)
+
+        # 2) 去掉 UTF-8 BOM
+        txt = txt.lstrip("\ufeff")
+
+        # 3) 规范行尾：CRLF/CR -> LF
+        txt = txt.replace("\r\n", "\n").replace("\r", "\n")
+
+        # 4) 保守处理字面转义的换行/制表
+        if "\\n" in txt and "\n" not in txt:
+            txt = txt.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+        else:
+            # 如果文本中既有真实换行也有字面 \r\n，做有限的替换以清理
+            if "\\r\\n" in txt:
+                txt = txt.replace("\\r\\n", "\n")
+
+        # 5) 去交互式提示符（多行模式）
+        txt = cls.PY_REPL_PROMPT_RE.sub("", txt)
+        txt = cls.NB_IN_PROMPT_RE.sub("", txt)
+
+        # 6) dedent + 去首尾额外换行，确保以单个 '\n' 结尾
+        txt = textwrap.dedent(txt).strip("\n") + "\n"
+        return txt
+
+    # --- 在 class TextSanitizer 内新增一个安全解码的小工具 ---
+    @classmethod
+    def _decode_string_with_json_if_needed(cls, s: str) -> str:
+        """
+        使用 JSON 解码处理字符串中的转义（\\\" \\\\ \\/ \\b \\f \\n \\r \\t \\uXXXX \\xHH），
+        在不破坏中文（非 ASCII）的前提下还原。
+        方案说明：
+        - 先用 fix_invalid_json_escapes 处理非法单反斜杠，避免 json.loads 报错；
+        - 再把处理后的内容包在双引号内交给 json.loads，能正确解析常见转义序列且保留 Unicode。
+        - 若解析失败，返回原字符串（保守策略）。
+        """
+        if not isinstance(s, str) or not s:
+            return ""
+        s2 = cls.fix_invalid_json_escapes(s)
+        try:
+            return json.loads(f'"{s2}"')
+        except Exception:
+            # 解析失败时保守返回原样，避免破坏中文或其他 Unicode 内容
+            return s
+
+    # --- 替换原有 extract_code_from_arguments 方法 ---
+    @classmethod
+    def extract_code_from_arguments(cls, args_raw: str) -> str:
+        """
+        从 tools.arguments（通常是 LLM 返回的字符串）中尽可能安全地抽取 code 字段。
+        逻辑顺序：
+        1) 尝试严格的 json.loads（首选，不会破坏 Unicode）；
+        2) 宽松匹配 "code": "..." ，根据内容类型采取不同处理策略：
+           - 纯 ASCII 且仅含字面转义（\\n/\\t 等）时做轻量替换；
+           - 含非 ASCII（如中文）且含转义时使用 JSON 解码恢复转义；
+           - 仅含标准转义时同样用 JSON 解码；
+        3) 匹配 code: xxx 的单行键值对作为最后兜底；
+        4) 若均未命中，返回剥围栏后的原文（保守）。
+        """
+        stripped = cls.strip_fences_outer_or_all(args_raw or "")
+
+        # 1) 尝试严格 JSON（首选路径，零损伤）
+        try:
+            obj = json.loads(stripped)
+            if isinstance(obj, dict) and "code" in obj:
+                val = obj.get("code", "")
+                return val if isinstance(val, str) else str(val)
+        except Exception:
+            pass
+
+        # 2) 宽松 JSON: 匹配 "code": "...."
+        m2 = cls.QUOTED_CODE_RE.search(stripped)
+        if m2:
+            s = m2.group(1)
+
+            # 2.1 纯 ASCII 且明显只是字面转义（无真实换行/制表、含 \n/\r\n/\t）
+            #     这种情况只做轻量替换，不做 unicode_escape，避免误伤多字节字符
+            if cls.looks_like_literal_escapes(s):
+                return s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+            # 2.2 含非 ASCII（可能有中文）且带转义：用 JSON 解码最稳妥
+            has_non_ascii = any(ord(ch) > 127 for ch in s)
+            has_escapes = bool(re.search(r"\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\[\"\\/bfnrt]", s))
+            if has_non_ascii and has_escapes:
+                return cls._decode_string_with_json_if_needed(s)
+
+            # 2.3 仅有标准转义（即便是 ASCII），也用 JSON 解码统一处理
+            if has_escapes:
+                return cls._decode_string_with_json_if_needed(s)
+
+            # 2.4 没有任何需要处理的转义，原样返回
+            return s
+
+        # 3) 其它兜底：code: xxx 单行键值
+        m3 = cls.CODE_KV_LINE_RE.search(stripped)
+        if m3:
+            return m3.group(1).strip().strip('"').strip("'")
+
+        # 4) 最后兜底：去栅栏后的原文
+        return stripped
+
+    # -----------------------
+    # Markdown 图片路径解析与校验（支持嵌套括号与 <...> 包裹）
+    # -----------------------
+    @classmethod
+    def extract_markdown_image_paths(cls, text: str) -> List[str]:
+        """
+        更稳健地解析 Markdown 图片：
+        - 解析 '![alt](...)'，支持嵌套括号
+        - 处理 <...> 包裹、可选 "title"
+        - 返回路径列表，按出现顺序
+        """
+        if not text:
+            return []
+        paths: List[str] = []
+        i, L = 0, len(text)
+        while True:
+            start = text.find("![", i)
+            if start == -1:
+                break
+            close_br = text.find("]", start + 2)
+            if close_br == -1:
+                break
+            # 必须紧跟 '(' 才是图片语法
+            if close_br + 1 >= L or text[close_br + 1] != "(":
+                i = close_br + 1
+                continue
+
+            p = close_br + 2
+            depth = 0
+            end = -1
+            # 支持嵌套括号寻找匹配的 ')'
+            while p < L:
+                ch = text[p]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    if depth == 0:
+                        end = p
+                        break
+                    else:
+                        depth -= 1
+                p += 1
+            if end == -1:
+                break
+
+            raw_inside = text[close_br + 2 : end].strip()
+            path = raw_inside
+            # 处理 <...> 包裹
+            if path.startswith("<") and path.endswith(">"):
+                path = path[1:-1].strip()
+            else:
+                # 去掉可选 title (例如: path "title")
+                qpos = path.find('"')
+                if qpos == -1:
+                    qpos = path.find("'")
+                if qpos != -1:
+                    candidate = path[:qpos].strip()
+                    if candidate:
+                        path = candidate
+            # 去两端引号和空白
+            path = path.strip().strip('"').strip("'").strip()
+
+            if path:
+                paths.append(path)
+
+            i = end + 1
+
+        return paths
+
+    @classmethod
+    def normalize_relpath(cls, p: str) -> str:
+        """规范化相对路径（去掉开头 ./ 或 /，去首尾空白）"""
+        if not p:
+            return ""
+        p = p.strip()
+        if p.startswith("./"):
+            p = p[2:]
+        if p.startswith("/"):
+            p = p[1:]
+        return p
+
+    @classmethod
+    def is_allowed_image_prefix(
+        cls,
+        p: str,
+        allowed_prefixes: Tuple[str, ...] = (
+            "eda/figures/",
+            "sensitivity_analysis/figures/",
+        ),
+        allow_ques_prefix: bool = True,
+    ) -> bool:
+        """
+        路径前缀校验：允许固定白名单前缀；可选允许 quesN/figures/
+        """
+        if not p:
+            return False
+        p = cls.normalize_relpath(p)
+        if any(p.startswith(pref) for pref in allowed_prefixes):
+            return True
+        return bool(cls.QUES_FIG_PREFIX_RE.match(p)) if allow_ques_prefix else False
+
+    # -----------------------
+    # 其它小工具
+    # -----------------------
+    @staticmethod
+    def looks_like_literal_escapes(s: str) -> bool:
+        """
+        仅当字符串是 ASCII 且包含典型字面转义（\\n/\\r\\n/\\t），且没有真实换行/制表时返回 True。
+        保证不对含中文等多字节字符的字符串返回 True（避免误解码）。
+        """
+        if not isinstance(s, str) or not s:
+            return False
+        try:
+            s.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+        has_literal = ("\\n" in s) or ("\\r\\n" in s) or ("\\t" in s)
+        no_real = ("\n" not in s) and ("\r\n" not in s) and ("\t" not in s)
+        # 代码栅栏中不应该进行反解
+        return has_literal and no_real and ("```" not in s)
+
+
+================================================================================
 E:\repo1\MathModelAgent-python\backend\app\utils\cli.py 的内容:
 ================================================================================
+# app/utils/cli.py
+
 from textwrap import dedent
+
 
 def center_cli_str(text: str, width: int | None = None):
     import shutil
@@ -5689,9 +6311,7 @@ def center_cli_str(text: str, width: int | None = None):
     width = width or shutil.get_terminal_size().columns
     lines = text.split("\n")
     max_line_len = max(len(line) for line in lines)
-    return "\n".join(
-        (line + " " * (max_line_len - len(line))).center(width) for line in lines
-    )
+    return "\n".join((line + " " * (max_line_len - len(line))).center(width) for line in lines)
 
 
 def get_ascii_banner(center: bool = True) -> str:
@@ -5718,6 +6338,8 @@ def get_ascii_banner(center: bool = True) -> str:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\utils\common_utils.py 的内容:
 ================================================================================
+# app/utils/common_utils.py
+
 import os
 import datetime
 import hashlib
@@ -5786,13 +6408,9 @@ def get_current_files(folder_path: str, type: str = "all") -> list[str]:
     elif type == "ipynb":
         return [file for file in files if file.endswith(".ipynb")]
     elif type == "data":
-        return [
-            file for file in files if file.endswith(".xlsx") or file.endswith(".csv")
-        ]
+        return [file for file in files if file.endswith(".xlsx") or file.endswith(".csv")]
     elif type == "image":
-        return [
-            file for file in files if file.endswith(".png") or file.endswith(".jpg")
-        ]
+        return [file for file in files if file.endswith(".png") or file.endswith(".jpg")]
 
 
 # 判断content是否包含图片 xx.png,对其处理为    ![filename](http://localhost:8000/static/20250428-200915-ebc154d4/filename.jpg)
@@ -5830,9 +6448,7 @@ def md_2_docx(task_id: str):
 
 
 def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:
-    main_text = re.sub(
-        r"\n\[\^\d+\]:.*?(?=\n\[\^|\n\n|\Z)", "", text, flags=re.DOTALL
-    ).strip()
+    main_text = re.sub(r"\n\[\^\d+\]:.*?(?=\n\[\^|\n\n|\Z)", "", text, flags=re.DOTALL).strip()
 
     # 匹配脚注定义
     footnotes = re.findall(r"\[\^(\d+)\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)", text, re.DOTALL)
@@ -5843,6 +6459,8 @@ def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\utils\data_recorder.py 的内容:
 ================================================================================
+# app/utils/data_recorder.py
+
 import json
 import os
 from app.utils.log_util import logger
@@ -5890,12 +6508,8 @@ class DataRecorder:
 
         # 添加总计行
         total_chats = sum(usage["chat_count"] for usage in self.token_usage.values())
-        total_prompt = sum(
-            usage["prompt_tokens"] for usage in self.token_usage.values()
-        )
-        total_completion = sum(
-            usage["completion_tokens"] for usage in self.token_usage.values()
-        )
+        total_prompt = sum(usage["prompt_tokens"] for usage in self.token_usage.values())
+        total_completion = sum(usage["completion_tokens"] for usage in self.token_usage.values())
         total_tokens = sum(usage["total_tokens"] for usage in self.token_usage.values())
 
         rows.append(
@@ -5945,19 +6559,21 @@ class DataRecorder:
                     "message": {
                         "role": choice.message.role,
                         "content": choice.message.content,
-                        "tool_calls": [
-                            {
-                                "id": tool_call.id,
-                                "type": tool_call.type,
-                                "function": {
-                                    "name": tool_call.function.name,
-                                    "arguments": tool_call.function.arguments,
-                                },
-                            }
-                            for tool_call in (choice.message.tool_calls or [])
-                        ]
-                        if hasattr(choice.message, "tool_calls")
-                        else None,
+                        "tool_calls": (
+                            [
+                                {
+                                    "id": tool_call.id,
+                                    "type": tool_call.type,
+                                    "function": {
+                                        "name": tool_call.function.name,
+                                        "arguments": tool_call.function.arguments,
+                                    },
+                                }
+                                for tool_call in (choice.message.tool_calls or [])
+                            ]
+                            if hasattr(choice.message, "tool_calls")
+                            else None
+                        ),
                     },
                     "finish_reason": choice.finish_reason,
                 }
@@ -5965,16 +6581,16 @@ class DataRecorder:
             ],
             "created": completion.created,
             "model": completion.model,
-            "usage": {
-                "completion_tokens": completion.usage.completion_tokens,
-                "prompt_tokens": completion.usage.prompt_tokens,
-                "total_tokens": completion.usage.total_tokens,
-            }
-            if hasattr(completion, "usage")
-            else None,
-            "system_fingerprint": completion.system_fingerprint
-            if hasattr(completion, "system_fingerprint")
-            else None,
+            "usage": (
+                {
+                    "completion_tokens": completion.usage.completion_tokens,
+                    "prompt_tokens": completion.usage.prompt_tokens,
+                    "total_tokens": completion.usage.total_tokens,
+                }
+                if hasattr(completion, "usage")
+                else None
+            ),
+            "system_fingerprint": completion.system_fingerprint if hasattr(completion, "system_fingerprint") else None,
         }
 
     def append_chat_completion(self, completion: Any, agent_name: str) -> None:
@@ -6027,9 +6643,7 @@ class DataRecorder:
         # 写入 JSON 文件
         self.write_to_json(self.token_usage, "token_usage.json")
 
-    def calculate_cost(
-        self, model: str, prompt_tokens: int, completion_tokens: int
-    ) -> float:
+    def calculate_cost(self, model: str, prompt_tokens: int, completion_tokens: int) -> float:
         """计算API调用费用
         Args:
             model: 模型名称
@@ -6062,6 +6676,8 @@ class DataRecorder:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\utils\log_util.py 的内容:
 ================================================================================
+# app/utils/log_util.py
+
 import os
 import sys
 import time
@@ -6072,9 +6688,7 @@ class LoggerInitializer:
     def __init__(self):
         self.log_path = os.path.join(os.getcwd(), "logs")
         self.__ensure_log_directory_exists()
-        self.log_path_error = os.path.join(
-            self.log_path, f"{time.strftime('%Y-%m-%d')}_error.log"
-        )
+        self.log_path_error = os.path.join(self.log_path, f"{time.strftime('%Y-%m-%d')}_error.log")
 
     def __ensure_log_directory_exists(self):
         """
@@ -6125,6 +6739,8 @@ logger = log_initializer.init_log()
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\utils\RichPrinter.py 的内容:
 ================================================================================
+# app/utils/RichPrinter.py
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -6186,13 +6802,9 @@ class RichPrinter:
     def print_agent_msg(message: str, agent_name: str):
         logger.info(f"{agent_name}: {message}")
         if agent_name == "CoderAgent":
-            rprint(
-                f"[bold purple on green]{agent_name}[/bold purple on green]: {message}"
-            )
+            rprint(f"[bold purple on green]{agent_name}[/bold purple on green]: {message}")
         elif agent_name == "WriterAgent":
-            rprint(
-                f"[bold purple on yellow]{agent_name}[/bold purple on yellow]: {message}"
-            )
+            rprint(f"[bold purple on yellow]{agent_name}[/bold purple on yellow]: {message}")
         elif agent_name == "test_agent":
             rprint(f"[bold white on blue]{agent_name}[/bold white on blue]: {message}")
         else:
@@ -6285,6 +6897,8 @@ class RichPrinter:
 ================================================================================
 E:\repo1\MathModelAgent-python\backend\app\utils\track.py 的内容:
 ================================================================================
+# app/utils/track.py
+
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 

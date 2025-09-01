@@ -1,3 +1,5 @@
+# app/router/ws_router.py
+
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage
@@ -21,7 +23,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
 
     # 建立 WebSocket 连接
     await ws_manager.connect(websocket)
-    websocket.timeout = 600
+    websocket.timeout = 6000
     print(f"WebSocket connection status: {websocket.client}")
 
     # 订阅 Redis 频道
@@ -45,9 +47,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                         print(f"Sent message to WebSocket: {msg_dict}")
                     except Exception as e:
                         print(f"Error parsing message: {e}")
-                        await ws_manager.send_personal_message_json(
-                            {"error": str(e)}, websocket
-                        )
+                        await ws_manager.send_personal_message_json({"error": str(e)}, websocket)
                 await asyncio.sleep(0.1)
 
             except WebSocketDisconnect:

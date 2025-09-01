@@ -1,3 +1,5 @@
+# app/models/user_output.py
+
 import os
 import re
 from app.utils.data_recorder import DataRecorder
@@ -7,9 +9,7 @@ import uuid
 
 
 class UserOutput:
-    def __init__(
-        self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None
-    ):
+    def __init__(self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None):
         self.work_dir = work_dir
         # 存储各小节结果：{ key: {"response_content": str, "footnotes": list[str]} }
         self.res: dict[str, dict] = {}
@@ -25,15 +25,15 @@ class UserOutput:
         """按论文结构定义章节顺序；用于最终拼接"""
         ques_str = [f"ques{i}" for i in range(1, self.ques_count + 1)]
         self.seq = [
-            "firstPage",              # 标题、摘要、关键词
-            "RepeatQues",             # 一、问题重述
-            "analysisQues",           # 二、问题分析
-            "modelAssumption",        # 三、模型假设
-            "symbol",                 # 四、符号说明
-            "eda",                    # 数据预处理（EDA）
-            *ques_str,                # 模型建立与求解（问题1,2,...）
-            "sensitivity_analysis",   # 模型分析与检验
-            "judge",                  # 模型评价、改进与推广
+            "firstPage",  # 标题、摘要、关键词
+            "RepeatQues",  # 一、问题重述
+            "analysisQues",  # 二、问题分析
+            "modelAssumption",  # 三、模型假设
+            "symbol",  # 四、符号说明
+            "eda",  # 数据预处理（EDA）
+            *ques_str,  # 模型建立与求解（问题1,2,...）
+            "sensitivity_analysis",  # 模型分析与检验
+            "judge",  # 模型评价、改进与推广
         ]
 
     def set_res(self, key: str, writer_response: WriterResponse):
@@ -42,7 +42,7 @@ class UserOutput:
             # 容错：允许传入兼容结构的字典
             try:
                 rc = (writer_response or {}).get("response_content", "")  # type: ignore
-                fn = (writer_response or {}).get("footnotes", [])        # type: ignore
+                fn = (writer_response or {}).get("footnotes", [])  # type: ignore
             except Exception:
                 rc, fn = "", []
         else:
@@ -83,6 +83,7 @@ class UserOutput:
 
         # 匹配 {[^数字]: 引用内容}，允许跨行
         pattern = re.compile(r"\{\[\^(\d+)\]:\s*(.*?)\}", re.DOTALL)
+
         def _find_existing_uuid(content: str) -> str | None:
             for u, data in self.footnotes.items():
                 if data.get("content") == content:

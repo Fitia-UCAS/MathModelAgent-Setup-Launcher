@@ -1,3 +1,5 @@
+# app/tools/openalex_scholar.py
+
 import requests
 from typing import List, Dict, Any, Tuple
 from app.services.redis_manager import redis_manager
@@ -53,11 +55,7 @@ class OpenAlexScholar:
         else:
             raise ValueError("配置OpenAlex邮箱获取访问文献权利")
 
-        headers = {
-            "User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})"
-            if self.email
-            else "OpenAlexScholar/1.0"
-        }
+        headers = {"User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})" if self.email else "OpenAlexScholar/1.0"}
 
         try:
             print(f"请求 URL: {base_url} 参数: {params}")
@@ -88,9 +86,11 @@ class OpenAlexScholar:
                     author_info = {
                         "name": author.get("display_name"),
                         "position": authorship.get("author_position"),
-                        "institution": authorship.get("institutions", [{}])[0].get("display_name")
-                        if authorship.get("institutions")
-                        else None,
+                        "institution": (
+                            authorship.get("institutions", [{}])[0].get("display_name")
+                            if authorship.get("institutions")
+                            else None
+                        ),
                     }
                     authors.append(author_info)
 

@@ -1,82 +1,104 @@
+# app/services/redis_manager.py
+
 import redis.asyncio as aioredis
 from typing import Optional, Any, Dict, Union
 import json
 from pathlib import Path
 from app.config.setting import settings
-from app.schemas.response import Message  # 这里是你定义的 Pydantic 模型（v1/v2 皆可）
+from app.schemas.response import Message  # v1/v2 pydantic model
 from app.utils.log_util import logger
 from uuid import uuid4
 
 
-def _to_str_or_empty(v: Any) -> str:
-    """把 None / 非字符串 转成字符串，避免前端/下游被 None 砸到。"""
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return v
+def _json_safe(obj: Any) -> Any:
+    """
+    递归将对象转换为 JSON 可序列化的结构：
+    - Pydantic v1/v2 -> dict()
+    - dict/list/tuple/set 递归处理（set -> list；tuple -> list）
+    - bytes -> utf-8 解码失败则转十六进制字符串
+    - 其余不可序列化对象 -> str(obj)
+    """
+    # 原生可序列化类型
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+
+    # Pydantic v2/v1
+    if hasattr(obj, "model_dump") and callable(obj.model_dump):
+        try:
+            return _json_safe(obj.model_dump())
+        except Exception:
+            pass
+    if hasattr(obj, "dict") and callable(obj.dict):
+        try:
+            return _json_safe(obj.dict())
+        except Exception:
+            pass
+
+    # 容器类型
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, set):
+        return [_json_safe(v) for v in obj]
+
+    # bytes
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        try:
+            return bytes(obj).decode("utf-8")
+        except Exception:
+            return bytes(obj).hex()
+
+    # 其他：转字符串兜底
     try:
-        return str(v)
+        return str(obj)
     except Exception:
-        return ""
+        return f"<unserializable:{type(obj).__name__}>"
 
 
 def _normalize_message_payload(message: Union[Message, Dict[str, Any]]) -> Dict[str, Any]:
     """
-    统一清洗消息对象为 JSON-safe dict：
+    统一清洗消息对象为 JSON-safe dict（不强制把 content 变成字符串）：
     1) 支持 Pydantic v1/v2（优先用 model_dump / dict）
     2) 兜底生成 id / msg_type
-    3) content 强制非 None、可序列化
-    4) 避免不可序列化对象破坏 publish/file-save
+    3) 对整个 payload 做 _json_safe，确保可序列化
     """
     # 1) 提取为字典
-    payload: Dict[str, Any]
     if hasattr(message, "model_dump"):  # pydantic v2
-        payload = message.model_dump()
-    elif hasattr(message, "dict"):      # pydantic v1
-        payload = message.dict()
+        raw = message.model_dump()
+    elif hasattr(message, "dict"):  # pydantic v1
+        raw = message.dict()
     elif isinstance(message, dict):
-        payload = dict(message)
+        raw = dict(message)
     else:
         # 极端兜底：未知类型
-        payload = {
+        raw = {
             "id": str(uuid4()),
             "msg_type": "system",
-            "content": _to_str_or_empty(message),
+            "content": f"{message}",
             "type": "warning",
         }
 
     # 2) id / msg_type 兜底
-    if not isinstance(payload.get("id"), str) or not payload.get("id"):
-        payload["id"] = str(uuid4())
-    if not isinstance(payload.get("msg_type"), str) or not payload.get("msg_type"):
-        # 默认按 system 处理，避免前端解析失败
-        payload["msg_type"] = "system"
+    if not isinstance(raw.get("id"), str) or not raw.get("id"):
+        raw["id"] = str(uuid4())
+    if not isinstance(raw.get("msg_type"), str) or not raw.get("msg_type"):
+        raw["msg_type"] = "system"
 
-    # 3) content 兜底（None → ""；复杂结构 → json.dumps 或 str）
-    content = payload.get("content", "")
-    if content is None:
-        content = ""
-    if not isinstance(content, str):
-        try:
-            # 尝试 JSON 序列化（在前端显示时更直观）
-            content = json.dumps(content, ensure_ascii=False)
-        except Exception:
-            content = _to_str_or_empty(content)
-    payload["content"] = content
+    # 3) JSON 安全化（保持 content 的原始结构：str/dict/list…）
+    payload = _json_safe(raw)
 
-    # 4) 最后再尝试把整个 payload 过一遍 JSON 编码，确保无不可序列化对象
-    #    如果失败，就把无法序列化的字段转字符串
+    # 最后校验：如仍不可序列化，逐字段兜底
     try:
         json.dumps(payload, ensure_ascii=False)
     except TypeError:
-        # 逐字段兜底
-        safe_payload = {}
+        safe_payload: Dict[str, Any] = {}
         for k, v in payload.items():
             try:
                 json.dumps({k: v}, ensure_ascii=False)
                 safe_payload[k] = v
             except TypeError:
-                safe_payload[k] = _to_str_or_empty(v)
+                safe_payload[k] = _json_safe(str(v))
         payload = safe_payload
 
     return payload
@@ -95,7 +117,7 @@ class RedisManager:
             self._client = aioredis.Redis.from_url(
                 self.redis_url,
                 decode_responses=True,
-                max_connections=settings.REDIS_MAX_CONNECTIONS,
+                max_connections=getattr(settings, "REDIS_MAX_CONNECTIONS", None),
             )
         logger.info(f"Redis 连接建立成功: {self.redis_url}")
         return self._client
@@ -104,12 +126,12 @@ class RedisManager:
         """设置Redis键值对"""
         client = await self.get_client()
         await client.set(key, value)
+        # 10 小时过期（保持你原来逻辑）
         await client.expire(key, 36000)
 
     async def _save_message_to_file(self, task_id: str, message: Union[Message, Dict[str, Any]]):
         """将消息保存到文件中，同一任务的消息保存在同一个文件中"""
         try:
-            # 统一清洗
             payload = _normalize_message_payload(message)
 
             # 确保目录存在
@@ -125,7 +147,6 @@ class RedisManager:
                     try:
                         messages = json.load(f)
                     except Exception:
-                        # 文件损坏等极端情况，重置
                         messages = []
 
             # 添加新消息
@@ -138,27 +159,44 @@ class RedisManager:
             logger.debug(f"消息已追加到文件: {file_path}")
         except Exception as e:
             logger.error(f"保存消息到文件失败: {str(e)}")
-            # 不抛出异常，确保主流程不受影响
+            # 不抛异常，保证主流程不受影响
 
     async def publish_message(self, task_id: str, message: Union[Message, Dict[str, Any]]):
-        """发布消息到特定任务的频道并保存到文件"""
+        """
+        发布消息到特定任务的频道并保存到文件
+        - 仅对“最外层 payload”序列化一次
+        - 不再把 payload['content'] 强制转为字符串
+        """
         client = await self.get_client()
         channel = f"task:{task_id}:messages"
+        payload = _normalize_message_payload(message)
         try:
-            # —— 统一清洗，避免 content=None / 不可序列化字段 ——
-            payload = _normalize_message_payload(message)
-            message_json = json.dumps(payload, ensure_ascii=False)
+            # 构造预览字符串（不改变 content 原类型）
+            try:
+                content_preview = (
+                    payload.get("content", "")
+                    if isinstance(payload.get("content", ""), str)
+                    else json.dumps(payload.get("content", ""), ensure_ascii=False)
+                )
+            except Exception:
+                content_preview = "<preview 生成失败>"
 
-            await client.publish(channel, message_json)
-            logger.debug(
-                f"消息已发布到频道 {channel}:mes_type:{payload.get('msg_type')}:" 
-                f"msg_content:{(payload.get('content') or '')[:200]}"
+            # 仅序列化一层
+            message_json = json.dumps(payload, ensure_ascii=False)
+            publish_result = await client.publish(channel, message_json)
+            logger.info(
+                f"发布到频道 {channel} 成功，订阅者数量: {publish_result}. "
+                f"msg_type:{payload.get('msg_type')} "
+                f"content_preview:{str(content_preview)[:200]}"
             )
 
-            # 保存消息到文件（同样使用清洗后的 payload）
+            # 落盘
             await self._save_message_to_file(task_id, payload)
+
+            return publish_result
+
         except Exception as e:
-            logger.error(f"发布消息失败: {str(e)}")
+            logger.exception(f"发布消息失败: task_id={task_id} channel={channel} error={e}")
             raise
 
     async def subscribe_to_task(self, task_id: str):
@@ -175,4 +213,5 @@ class RedisManager:
             self._client = None
 
 
+# singleton
 redis_manager = RedisManager()

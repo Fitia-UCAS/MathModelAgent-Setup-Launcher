@@ -1,14 +1,17 @@
+# app/core/agents/agent.py
+
 import json
 from app.core.llm.llm import LLM, simple_chat
 from app.utils.log_util import logger
 from icecream import ic
 from litellm import token_counter  # 用于按 token 估算
 
-# TODO: Memory 的管理
-# TODO: 评估任务完成情况，rethinking
+# 统一文本工具 / JSON 修复器
+from app.tools.text_sanitizer import TextSanitizer as TS
+from app.tools.json_fixer import JsonFixer  # 提供 LLM 重建修复 + 本地兜底
 
 # 软阈值：优先在到达硬上限前做清理，避免 400/ContextWindowExceeded
-SOFT_TOKEN_LIMIT = 100_000  # 可视需要调大/调小;理论最大值：≤131072（超过就一定报错）;建议范围：80k – 110k
+SOFT_TOKEN_LIMIT = 100_000  # 可按需调整
 
 
 class Agent:
@@ -21,21 +24,46 @@ class Agent:
     ) -> None:
         self.task_id = task_id
         self.model = model
-        self.chat_history: list[dict] = []  # 存储对话历史
-        self.max_chat_turns = max_chat_turns  # 最大对话轮次
-        self.current_chat_turns = 0  # 当前对话轮次计数器
-        self.max_memory = max_memory  # 最大记忆轮次（条数兜底）
+        self.chat_history: list[dict] = []  # 存储对话历史（只包含 system/user/assistant/tool）
+        self.max_chat_turns = max_chat_turns
+        self.current_chat_turns = 0
+        self.max_memory = max_memory
         self._inited = False  # 仅首次注入 system
+
+    # ---------------- 公用小工具（供子类直接调用） ---------------- #
+
+    @staticmethod
+    def sanitize_text_for_history(text: str) -> str:
+        """统一的历史入库清洗：去控制字符（保留 \t \n \r）+ 去 ANSI 颜色控制序列。"""
+        if text is None:
+            return ""
+        text = TS.clean_control_chars(text, keep_whitespace=True)
+        text = TS.strip_ansi(text)
+        return text
+
+    async def fix_and_parse_json(self, raw_text: str):
+        """
+        一步完成：提取/剥离围栏 → 修非法转义 → json.loads → 失败则 JsonFixer（含一次 LLM 重建修复）
+        返回: (obj, stage)；obj 解析失败时为 None，stage 记录修复阶段。
+        """
+        # 预清洗：控制字符 + 常见瑕疵
+        prepared = TS.clean_control_chars(raw_text or "", keep_whitespace=True)
+        prepared = TS.normalize_common_glitches(prepared)
+
+        # 直接交给 JsonFixer（其内部会 strip fences、修非法转义，并尝试 json.loads；
+        # 如失败，再调用一次 LLM 进行重建修复）
+        obj, stage = await JsonFixer.fix_and_parse(
+            raw=prepared,
+            llm=self.model,  # 若不想用二次 LLM，可改为 llm=None
+            agent_name=f"{self.__class__.__name__}.JsonFixer",
+        )
+        return obj, stage
+
+    # ---------------- 基类默认对话 ---------------- #
 
     async def run(self, prompt: str, system_prompt: str, sub_title: str) -> str:
         """
-        执行agent的对话并返回结果和总结
-
-        Args:
-            prompt: 输入的提示
-
-        Returns:
-            str: 模型的响应
+        执行agent的对话并返回结果（基类简单实现；复杂流程请在子类覆盖）
         """
         try:
             logger.info(f"{self.__class__.__name__}:开始:执行对话")
@@ -54,7 +82,9 @@ class Agent:
                 agent_name=self.__class__.__name__,
                 sub_title=sub_title,
             )
-            response_content = response.choices[0].message.content
+            response_content = getattr(response.choices[0].message, "content", "") or ""
+            response_content = self.sanitize_text_for_history(response_content)
+
             self.chat_history.append({"role": "assistant", "content": response_content})
             logger.info(f"{self.__class__.__name__}:完成:执行对话")
             return response_content
@@ -63,15 +93,18 @@ class Agent:
             logger.error(f"Agent执行失败: {str(e)}")
             return error_msg
 
+    # ---------------- 历史入库：统一清洗与规范化 ---------------- #
+
     async def append_chat_history(self, msg: dict) -> None:
         """
         稳健的消息追加函数 - 标准化为 OpenAI Chat Completions 规范（只用 system/user/assistant/tool）
         功能：
-        1) 规范化入参（把对象/非 dict 情况转换为 dict）
+        1) 规范化入参（对象→dict）
         2) 强制保证 msg['content'] 为字符串（绝不为 None）
-        3) 对工具响应消息（role == 'tool'）尽量抽取可读文本并填充 content
+        3) 对工具响应（role='tool'）尽量抽取可读文本
         4) 标准化 tool_calls（arguments→字符串；type=function）
-        5) 保持原有合并相邻 user / 内存清理 / 安全切割等逻辑
+        5) 入库前统一清洗（控制字符/ANSI）
+        6) 合并相邻 user / 触发内存清理
         """
         # —— 规范化入参 —— #
         if not isinstance(msg, dict):
@@ -86,10 +119,7 @@ class Agent:
         # 保证 role 字段存在且为字符串
         msg["role"] = msg.get("role", "assistant") or "assistant"
 
-        # ★ 关键：不要把 'tool' 改成 'function'（OpenAI 合法角色只有 system/user/assistant/tool）
-        # 如果历史里曾混入 'function'（旧实现遗留），建议在 llm.py 的 sanitize 中兜底改回 'tool'，这里不做角色替换
-
-        # —— 重要：确保 content 字段永远为字符串（非 None） —— #
+        # —— 确保 content 是字符串 —— #
         raw_content = msg.get("content", "")
         if raw_content is None:
             raw_content = ""
@@ -98,13 +128,12 @@ class Agent:
         if msg["role"] == "tool" and (not raw_content or str(raw_content).strip() == ""):
             extracted_parts = []
 
-            # 1) 优先查看 msg.get("output")（常见为 list/dict/str）
+            # 1) 优先查看 msg.get("output") 或常见别名
             out = msg.get("output") or msg.get("outputs") or msg.get("result") or msg.get("results")
             if out is not None:
                 if isinstance(out, (list, tuple)):
                     for item in out:
                         if isinstance(item, dict):
-                            # 常见字段：msg, message, text, result, content
                             for k in ("msg", "message", "text", "result", "content"):
                                 v = item.get(k)
                                 if v:
@@ -167,7 +196,7 @@ class Agent:
                     parts.append(s)
                 raw_content = "\n".join(parts)
 
-        # 最终确保为字符串（防止非 str 类型）
+        # 最终确保为字符串
         try:
             if isinstance(raw_content, str):
                 final_content = raw_content
@@ -176,7 +205,8 @@ class Agent:
         except Exception:
             final_content = ""
 
-        # 把标准化后的 content 放回 msg
+        # 入库前统一清洗：控制字符 + ANSI
+        final_content = self.sanitize_text_for_history(final_content)
         msg["content"] = final_content
 
         # —— 合并相邻 user —— #
@@ -262,12 +292,11 @@ class Agent:
         else:
             ic("跳过内存清理(tool 消息)")
 
+    # ---------------- 内存清理：重量版总结 + 安全切割 ---------------- #
+
     async def clear_memory(self):
         """当聊天历史超过限制时，使用 simple_chat 进行“重量版”总结压缩"""
         ic(f"检查内存清理: 当前={len(self.chat_history)}, 最大(条数兜底)={self.max_memory}")
-
-        # 条数不超时也可能因 token 超限，这里不再提前 return
-
         ic("开始内存清理")
         logger.info(f"{self.__class__.__name__}:开始清除记忆，当前记录数：{len(self.chat_history)}")
 
@@ -287,14 +316,14 @@ class Agent:
             ic(f"总结范围: {start_idx} -> {end_idx}")
 
             if end_idx > start_idx:
-                # 构造摘要提示，仅传“需要总结的片段”（重量版 simple_chat 会做中段摘要+工具修复）
+                # 构造摘要提示，仅传“需要总结的片段”
                 summarize_history = []
                 if system_msg:
                     summarize_history.append(system_msg)
 
                 summarize_history.append(
                     {
-                        "role": "user",  # 修改：使用 user 角色
+                        "role": "user",
                         "content": (
                             "请简洁总结以下对话的关键内容和重要结论，保留重要的上下文信息：\n\n"
                             f"{self._format_history_for_summary(self.chat_history[start_idx:end_idx])}"
@@ -302,7 +331,7 @@ class Agent:
                     }
                 )
 
-                # 调用 simple_chat 进行总结（重量版已在 llm.py 中实现）
+                # 调用 simple_chat 进行总结
                 summary = await simple_chat(self.model, summarize_history)
 
                 # 重构聊天历史：系统消息 + 摘要 + 保留的消息（最后若干条）
@@ -310,9 +339,7 @@ class Agent:
                 if system_msg:
                     new_history.append(system_msg)
 
-                new_history.append(
-                    {"role": "user", "content": f"[历史对话总结-仅供上下文，无需回复]\n{summary}"}
-                )  # 修改：使用 user 角色
+                new_history.append({"role": "user", "content": f"[历史对话总结-仅供上下文，无需回复]\n{summary}"})
                 new_history.extend(self.chat_history[preserve_start_idx:])
 
                 # 确保 system 后第一条是 user
@@ -330,9 +357,11 @@ class Agent:
             safe_history = self._get_safe_fallback_history()
             self.chat_history = safe_history
 
+    # ---------------- 切割点选择与辅助 ---------------- #
+
     def _find_safe_preserve_point(self) -> int:
         """找到安全的保留起始点，确保不会破坏工具调用序列"""
-        # 最少保留最后10条消息，确保基本对话完整性（由原先3条提高到10条）
+        # 最少保留最后10条消息，确保基本对话完整性
         min_preserve = min(10, len(self.chat_history))
         preserve_start = len(self.chat_history) - min_preserve
         ic(f"寻找安全保留点: 历史长度={len(self.chat_history)}, 最少保留={min_preserve}, 开始位置={preserve_start}")
@@ -342,7 +371,6 @@ class Agent:
             if i >= len(self.chat_history):
                 continue
 
-            # 检查从这个位置开始是否是安全的（没有孤立的 function/tool 消息）
             is_safe = self._is_safe_cut_point(i)
             ic(f"检查位置 {i}: 安全={is_safe}")
             if is_safe:
@@ -376,7 +404,6 @@ class Agent:
                         prev_msg = self.chat_history[j]
                         if isinstance(prev_msg, dict) and "tool_calls" in prev_msg and prev_msg["tool_calls"]:
                             for tool_call in prev_msg["tool_calls"]:
-                                # 工具调用条目可能是字典或对象，尝试标准化比较
                                 tid = None
                                 if isinstance(tool_call, dict):
                                     tid = tool_call.get("id")
@@ -401,7 +428,6 @@ class Agent:
         if not self.chat_history:
             return []
 
-        # 保留系统消息
         safe_history = []
         if self.chat_history and self.chat_history[0].get("role") == "system":
             safe_history.append(self.chat_history[0])
@@ -426,7 +452,6 @@ class Agent:
         """查找最后一个未匹配的tool call的索引"""
         ic("开始查找未匹配的tool_call")
 
-        # 从后往前查找，寻找没有对应工具响应的 tool call
         for i in range(len(self.chat_history) - 1, -1, -1):
             msg = self.chat_history[i]
 
@@ -442,7 +467,6 @@ class Agent:
                     ic(f"检查tool_call_id: {tool_call_id}")
 
                     if tool_call_id:
-                        # 在后续消息中查找对应的工具响应
                         response_found = False
                         for j in range(i + 1, len(self.chat_history)):
                             response_msg = self.chat_history[j]
@@ -456,7 +480,6 @@ class Agent:
                                 break
 
                         if not response_found:
-                            # 找到未匹配的tool call
                             ic(f"❌ 发现未匹配的tool_call在位置 {i}, id={tool_call_id}")
                             return i
 
@@ -464,16 +487,17 @@ class Agent:
         return None
 
     def _format_history_for_summary(self, history: list[dict]) -> str:
-        """格式化历史记录用于总结"""
+        """格式化历史记录用于总结（控制长度）"""
         formatted = []
         for msg in history:
             role = msg.get("role")
             content = msg.get("content") or ""
-            content = content[:500] + "..." if len(content) > 500 else content  # 限制长度
+            content = content[:500] + "..." if len(content) > 500 else content
             formatted.append(f"{role}: {content}")
         return "\n".join(formatted)
 
     def _ensure_first_after_system_user(self, history: list) -> list:
+        """确保在 system 之后，第一条是 user（除非第一条 assistant 正在发起 tool_calls）"""
         if not history:
             return [{"role": "user", "content": "[空对话启动] 继续。"}]
 
@@ -486,7 +510,6 @@ class Agent:
 
         first_msg = history[i]
         if first_msg.get("role") != "user":
-            # 如果是assistant但包含tool_calls，就不要强插user，避免打断“调用→结果”序列
             if first_msg.get("role") == "assistant" and first_msg.get("tool_calls"):
                 return history
             content = (first_msg.get("content") or "").strip()
@@ -496,4 +519,3 @@ class Agent:
             else:
                 history = history[:i] + [{"role": "user", "content": "[承接上文上下文] 继续。"}] + history[i:]
         return history
-

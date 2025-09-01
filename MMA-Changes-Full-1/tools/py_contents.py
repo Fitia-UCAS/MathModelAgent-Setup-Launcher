@@ -1,7 +1,3 @@
-"""
-只获取 .py 文件内容并写入指定文件（固定扫描 backend/app）
-"""
-
 # 内置库
 import sys
 import os
@@ -51,9 +47,24 @@ def clean_content(content):
     return content
 
 
-def write_py_contents_to_file(scan_directory, output_directory, output_file_name, IGNORE_FOLDERS=None):
+def get_next_output_filename(output_dir: Path, base_name: str, ext: str = ".txt") -> Path:
     """
-    仅写入 .py 文件的内容
+    根据现有文件自动生成下一个编号的文件名
+    例如：后端现有的项目源码_001.txt, 后端现有的项目源码_002.txt ...
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    i = 1
+    while True:
+        filename = f"{base_name}_{i:03d}{ext}"
+        candidate = output_dir / filename
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def write_py_contents_to_file(scan_directory, output_directory, base_file_name, IGNORE_FOLDERS=None):
+    """
+    仅写入 .py 文件的内容，并自动编号输出
     """
     current_dir = Path(scan_directory)
 
@@ -61,10 +72,9 @@ def write_py_contents_to_file(scan_directory, output_directory, output_file_name
         print(f"错误: {current_dir} 不存在或不是目录.")
         return
 
-    # 输出目录
+    # 获取输出文件路径（自动编号）
     output_dir = Path(output_directory)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file_path = output_dir / output_file_name
+    output_file_path = get_next_output_filename(output_dir, base_file_name, ".txt")
 
     with open(output_file_path, "w", encoding="utf-8") as output_file:
         # 写目录结构
@@ -103,13 +113,10 @@ def write_py_contents_to_file(scan_directory, output_directory, output_file_name
 
 
 if __name__ == "__main__":
-    # 以当前工作目录为基准解析 backend/app；若脚本位置固定在项目根，也可改为基于 __file__：
-    # project_root = Path(__file__).resolve().parent
-    # scan_directory = project_root / "backend" / "app"
     scan_directory = Path("backend") / "app"
     scan_directory = scan_directory.resolve()
 
-    output_directory = "tools/py_contents/"
-    output_file_name = "py_contents.txt"
+    output_directory = "tools/"
+    base_file_name = "后端现有的项目源码"
 
-    write_py_contents_to_file(scan_directory, output_directory, output_file_name, IGNORE_FOLDERS)
+    write_py_contents_to_file(scan_directory, output_directory, base_file_name, IGNORE_FOLDERS)
