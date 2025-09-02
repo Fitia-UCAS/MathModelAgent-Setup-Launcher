@@ -1,3 +1,20 @@
+# mma_launcher.py
+
+"""
+MathModelAgent 启动器（完整版，含统一日志落盘 + ANSI 颜色处理）
+------------------------------------------------
+目标：
+1) 启动并托管 Redis / Backend(Uvicorn) / Frontend(Vite)；
+2) 将所有关键控制台输出合流写入 backend/logs/launcher/：
+   - NNN.log        : 纯文本（去色）
+   - NNN.ansi.log   : 保留 ANSI 颜色码（可选，默认开启）
+   其中 NNN 与 backend/project/work_dir 的 task_id（数字目录）保持一致：按当前最大目录号 + 1 生成；
+   若 work_dir 不存在或为空，退回扫描 backend/logs/messages 的编号；仍无则退回扫描 launcher/*.log。
+3) 仍保持实时回显到当前终端（带颜色）；
+4) 前端依赖安装/运行时的冗余噪声适度过滤。
+备注：日志文件中会去掉空行（包含只含空白/ANSI 的行）。
+"""
+
 import re
 import subprocess
 import sys
@@ -6,7 +23,8 @@ import os
 import shutil
 import time
 import socket
-from typing import Optional
+from typing import Optional, List
+import threading
 
 
 # ========= 基础工具 =========
@@ -16,10 +34,198 @@ class TimeUtils:
         return time.strftime("%H:%M:%S")
 
 
+# === ANSI 处理 ===
+_ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")  # 覆盖常见 CSI 序列
+
+
+def strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
+
+
+def decode_best_effort(b: bytes) -> str:
+    """按 UTF-8 -> GBK -> Latin-1 兜底解码一行字节，尽量避免乱码。"""
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return b.decode("gbk")
+        except UnicodeDecodeError:
+            return b.decode("latin1", errors="replace")
+
+
+class _GlobalFileLogger:
+    """
+    线程安全的文件日志器：单文件编号，多通道输出。
+    backend/logs/launcher/ 下生成：
+      - 001.log        : 去色纯文本
+      - 001.ansi.log   : 保留 ANSI 颜色码（LOG_WRITE_ANSI!=0 时生成）
+    编号策略（与 task_id 一致）：
+      1) 首选 backend/project/work_dir 下的数字目录，取最大 + 1；
+      2) 次选 backend/logs/messages 下的 NNN.json，取最大 + 1；
+      3) 退回 backend/logs/launcher 下 *.log 的编号自增。
+    """
+
+    def __init__(self, project_root: Path):
+        self.log_dir = project_root / "backend" / "logs" / "launcher"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
+        self.write_ansi = os.getenv("LOG_WRITE_ANSI", "1").strip().lower() not in ("0", "false", "no")
+        base = self._next_base(project_root)
+        self.path_plain = self.log_dir / f"{base}.log"
+        self.path_ansi = self.log_dir / f"{base}.ansi.log"
+        self.fp_plain = open(self.path_plain, "a", encoding="utf-8", buffering=1)
+        self.fp_ansi = open(self.path_ansi, "a", encoding="utf-8", buffering=1) if self.write_ansi else None
+        self.write_line(f"===== Log started at {time.strftime('%Y-%m-%d %H:%M:%S')} =====")
+
+    @staticmethod
+    def _max_numeric_name(children: List[Path]) -> int:
+        max_n = 0
+        for p in children:
+            m = re.fullmatch(r"(\d+)", p.name)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n > max_n:
+                        max_n = n
+                except Exception:
+                    pass
+        return max_n
+
+    @staticmethod
+    def _max_numeric_file(children: List[Path], pattern: str) -> int:
+        max_n = 0
+        rx = re.compile(pattern)
+        for p in children:
+            m = rx.search(p.name)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n > max_n:
+                        max_n = n
+                except Exception:
+                    pass
+        return max_n
+
+    def _next_base(self, project_root: Path) -> str:
+        # 1) work_dir 目录扫描
+        try:
+            work_dir = project_root / "backend" / "project" / "work_dir"
+            if work_dir.exists() and work_dir.is_dir():
+                max_n = self._max_numeric_name([p for p in work_dir.iterdir() if p.is_dir()])
+                if max_n >= 0:
+                    return f"{max_n + 1:03d}"
+        except Exception:
+            pass
+
+        # 2) messages 目录扫描
+        try:
+            msg_dir = project_root / "backend" / "logs" / "messages"
+            if msg_dir.exists() and msg_dir.is_dir():
+                max_n = self._max_numeric_file(list(msg_dir.iterdir()), r"(\d+)\.json$")
+                if max_n >= 0:
+                    return f"{max_n + 1:03d}"
+        except Exception:
+            pass
+
+        # 3) launcher 目录自身扫描
+        try:
+            idx = 1
+            for p in self.log_dir.glob("*.log"):
+                m = re.match(r"(\d{3})\.log$", p.name)
+                if m:
+                    try:
+                        idx = max(idx, int(m.group(1)) + 1)
+                    except Exception:
+                        pass
+            return f"{idx:03d}"
+        except Exception:
+            return "001"
+
+    @property
+    def path(self) -> Path:
+        # 兼容旧接口：返回纯文本日志路径
+        return self.path_plain
+
+    def write_line(self, line: str):
+        """
+        写纯文本（去色）与 ANSI 原文；过滤空行。
+        约定：传入的 line 不应包含换行符；但为兼容性，这里仍会去掉所有尾随 \r\n。
+        """
+        # 统一去掉尾随换行和回车
+        line_no_nl = line.rstrip("\r\n")
+
+        # 过滤“只含空白/ANSI”的行
+        if strip_ansi(line_no_nl).strip() == "":
+            return
+
+        # 只在这里追加一次换行
+        final_line = line_no_nl + "\n"
+        with self.lock:
+            try:
+                self.fp_plain.write(strip_ansi(final_line))
+            except Exception:
+                pass
+            if self.fp_ansi:
+                try:
+                    self.fp_ansi.write(final_line)
+                except Exception:
+                    pass
+
+    def close(self):
+        with self.lock:
+            try:
+                tail = f"===== Log closed at {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
+                self.fp_plain.write(strip_ansi(tail))
+                self.fp_plain.flush()
+                self.fp_plain.close()
+            except Exception:
+                pass
+            if self.fp_ansi:
+                try:
+                    self.fp_ansi.write(tail)
+                    self.fp_ansi.flush()
+                    self.fp_ansi.close()
+                except Exception:
+                    pass
+
+
+_GLOBAL_LOGGER: Optional[_GlobalFileLogger] = None
+
+
 class ConsolePrinter:
+    """
+    统一的控制台打印：终端彩色（原样），日志文件双路（去色 + 可选保留 ANSI）。
+    去空行策略：若消息在去 ANSI 后仅为空白，则不输出、不落盘。
+    """
+
     @staticmethod
     def print(prefix: str, msg: str):
-        print(f"{TimeUtils.ts()} [{prefix}]: {msg}", flush=True)
+        raw = f"{TimeUtils.ts()} [{prefix}]: {msg}"
+        if strip_ansi(raw).strip() == "":
+            return
+        print(raw, flush=True)
+        if _GLOBAL_LOGGER:
+            _GLOBAL_LOGGER.write_line(raw)
+
+    @staticmethod
+    def raw_from_proc(prefix: str, raw_line: str):
+        """
+        子进程原样行输出 -> 终端（彩色） + 文件（去色 + 可选 ANSI），统一加前缀。
+        保证仅添加一次换行：这里不再附加换行，交由 _GlobalFileLogger.write_line 统一追加。
+        """
+        # 规范：移除所有尾随 \r\n；避免“空白+ANSI”造成的空行
+        s = raw_line.rstrip("\r\n")
+        if strip_ansi(s).strip() == "":
+            return
+
+        out = f"{TimeUtils.ts()} [{prefix}] {s}"
+
+        # 控制台打印一行（print 自带换行）
+        print(out, flush=True)
+
+        # 文件输出（不含多余换行，由 write_line 统一追加）
+        if _GLOBAL_LOGGER:
+            _GLOBAL_LOGGER.write_line(out)
 
 
 class OutputConfigurator:
@@ -35,7 +241,7 @@ class Bootstrapper:
     """引导安装：按需安装第三方库（pip）"""
 
     @staticmethod
-    def ensure_library_installed(pip_name: str, import_name: str = None, index_url: str = None):
+    def ensure_library_installed(pip_name: str, import_name: Optional[str] = None, index_url: Optional[str] = None):
         mod = import_name or pip_name
         try:
             __import__(mod)
@@ -58,14 +264,14 @@ Bootstrapper.ensure_library_installed(
 )
 
 # 其余导入在安装后进行
-import psutil
+import psutil  # noqa: E402
 
 
 # ========= Windows 原生弹窗 =========
 class Dialogs:
     """
     1) yes_no_cancel: MessageBox(Yes/No/Cancel)，支持默认按钮与可选超时
-    2) ask_directory: Shell 文件夹选择对话框（新样式）
+    2) ask_directory: Shell 文件夹选择对话框
     """
 
     import os as _pyos
@@ -76,9 +282,9 @@ class Dialogs:
     def _owner_hwnd():
         if not Dialogs._is_win:
             return 0
-        import ctypes
+        import ctypes  # noqa: WPS433
 
-        u32 = ctypes.windll.user32
+        u32 = ctypes.windll.user32  # noqa: WPS441
         h = u32.GetForegroundWindow()
         if not h:
             h = u32.GetConsoleWindow()
@@ -90,14 +296,9 @@ class Dialogs:
         message: str,
         timeout_sec: int = 0,
         default: str = "no",
-        icon_emoji: str = None,  # 为兼容原签名，无实际作用
-        theme: str = None,  # 为兼容原签名，无实际作用
+        icon_emoji: Optional[str] = None,
+        theme: Optional[str] = None,
     ) -> str:
-        """
-        返回: "yes" / "no" / "cancel"
-        1) timeout_sec > 0：尝试 MessageBoxTimeoutW，到时选默认项
-        2) default: "yes" or "no"
-        """
         if not Dialogs._is_win:
             try:
                 ans = input(f"{title}\n{message}\n[y]是 / [n]否 / [c]取消 > ").strip().lower()
@@ -105,10 +306,10 @@ class Dialogs:
             except Exception:
                 return default
 
-        import ctypes
-        from ctypes import wintypes
+        import ctypes  # noqa: WPS433
+        from ctypes import wintypes  # noqa: WPS433
 
-        u32 = ctypes.windll.user32
+        u32 = ctypes.windll.user32  # noqa: WPS441
         MB_YESNOCANCEL = 0x00000003
         MB_ICONQUESTION = 0x00000020
         MB_TOPMOST = 0x00040000
@@ -127,12 +328,11 @@ class Dialogs:
 
         if timeout_sec and timeout_sec > 0:
             try:
-                # BOOL MessageBoxTimeoutW(HWND, LPCWSTR, LPCWSTR, UINT, WORD, DWORD)
                 u32.MessageBoxTimeoutW.restype = ctypes.c_int
                 u32.MessageBoxTimeoutW.argtypes = [
                     wintypes.HWND,
                     wintypes.LPCWSTR,
-                    wintypes.LPCWSTR,
+                    wintypes.LPWSTR,
                     wintypes.UINT,
                     wintypes.WORD,
                     wintypes.DWORD,
@@ -153,18 +353,17 @@ class Dialogs:
 
     @staticmethod
     def ask_directory(title: str) -> str:
-        """返回选择的文件夹路径，取消返回空字符串。"""
         if not Dialogs._is_win:
             try:
                 return input(f"{title}\n请输入目录路径（留空取消）： ").strip()
             except Exception:
                 return ""
 
-        import ctypes
-        from ctypes import wintypes
+        import ctypes  # noqa: WPS433
+        from ctypes import wintypes  # noqa: WPS433
 
-        shell32 = ctypes.windll.shell32
-        ole32 = ctypes.windll.ole32
+        shell32 = ctypes.windll.shell32  # noqa: WPS441
+        ole32 = ctypes.windll.ole32  # noqa: WPS441
 
         try:
             ole32.CoInitialize(None)
@@ -175,7 +374,7 @@ class Dialogs:
         BIF_NEWDIALOGSTYLE = 0x00000040
         BIF_VALIDATE = 0x00000020
 
-        class BROWSEINFO(ctypes.Structure):
+        class BROWSEINFO(ctypes.Structure):  # noqa: WPS430
             _fields_ = [
                 ("hwndOwner", wintypes.HWND),
                 ("pidlRoot", ctypes.c_void_p),
@@ -223,7 +422,7 @@ class Dialogs:
 
 
 # ========= 配置管理 =========
-from dotenv import load_dotenv, set_key, dotenv_values
+from dotenv import load_dotenv, set_key, dotenv_values  # noqa: E402
 
 
 class ConfigManager:
@@ -283,14 +482,14 @@ class PathPicker:
     name = "PathPicker"
 
     @staticmethod
-    def _check_path_valid(path: str, required_files: list) -> bool:
+    def _check_path_valid(path: str, required_files: List[str]) -> bool:
         p = Path(path)
         if not p.exists():
             return False
         return all((p / f).exists() for f in required_files)
 
     @staticmethod
-    def pick_and_validate(cfg: ConfigManager, env_var: str, title: str, required_files: list) -> str:
+    def pick_and_validate(cfg: ConfigManager, env_var: str, title: str, required_files: List[str]) -> str:
         current = cfg.get(env_var, "")
         if current and PathPicker._check_path_valid(current, required_files):
             ConsolePrinter.print(PathPicker.name, f"{env_var} already set: {current}")
@@ -355,23 +554,25 @@ class BackendInstaller:
     name = "BackendInstaller"
 
     @staticmethod
-    def _resolve_uv_cmd() -> list[str] | None:
-        import shutil, sys, site
+    def _resolve_uv_cmd() -> Optional[List[str]]:
+        import shutil as _shutil
+        import sys as _sys
+        import site as _site
 
-        which_uv = shutil.which("uv") or shutil.which("uv.exe")
+        which_uv = _shutil.which("uv") or _shutil.which("uv.exe")
         if which_uv:
             return [which_uv]
         candidates = [
-            Path(sys.executable).parent / "Scripts" / "uv.exe",
-            Path(sys.executable).parent / "uv.exe",
-            Path(site.getuserbase()) / "Scripts" / "uv.exe",
+            Path(_sys.executable).parent / "Scripts" / "uv.exe",
+            Path(_sys.executable).parent / "uv.exe",
+            Path(_site.getuserbase()) / "Scripts" / "uv.exe",
         ]
         for p in candidates:
             if p.exists():
                 return [str(p)]
         try:
             __import__("uv")
-            return [sys.executable, "-m", "uv"]
+            return [_sys.executable, "-m", "uv"]
         except Exception:
             return None
 
@@ -393,9 +594,6 @@ class BackendInstaller:
 
     @staticmethod
     def _locks_unchanged(backend_dir: Path, venv_dir: Path) -> bool:
-        """
-        若 .venv 存在，且 .venv.stamp 与 uv.lock 内容一致，则视为依赖未变，可跳过安装/同步。
-        """
         lock = backend_dir / "uv.lock"
         stamp = venv_dir / ".venv.stamp"
         if not (lock.exists() and stamp.exists()):
@@ -414,17 +612,10 @@ class BackendInstaller:
 
     @staticmethod
     def install(project_root: Path) -> Path:
-        """
-        行为策略（从最“保守跳过”到“强制同步”的优先级）：
-        1) BACKEND_SKIP_INSTALL=1 且 .venv 就绪  -> 直接跳过
-        2) .venv 存在 且 锁文件未变（.venv.stamp 与 uv.lock 相同） -> 跳过
-        3) 否则运行 `uv sync`（可能会下载，取决于本地缓存/锁变化）
-        """
         backend_dir = project_root / "backend"
         venv_dir = backend_dir / ".venv"
         os.chdir(backend_dir)
 
-        # 1) 强力跳过开关
         if os.getenv("BACKEND_SKIP_INSTALL", "").strip().lower() in ("1", "true", "yes"):
             if BackendInstaller._venv_ready(venv_dir):
                 ConsolePrinter.print(BackendInstaller.name, "Skip backend install (BACKEND_SKIP_INSTALL=1)")
@@ -436,7 +627,6 @@ class BackendInstaller:
                     "BACKEND_SKIP_INSTALL=1 但 .venv 不存在或不完整 => 无法跳过，将继续检查锁文件机制/执行安装",
                 )
 
-        # 2) 锁文件未变 & venv 存在 -> 跳过
         if BackendInstaller._venv_ready(venv_dir) and BackendInstaller._locks_unchanged(backend_dir, venv_dir):
             ConsolePrinter.print(
                 BackendInstaller.name, "Backend deps unchanged (uv.lock matches .venv.stamp) -> skip uv sync"
@@ -444,7 +634,6 @@ class BackendInstaller:
             ConsolePrinter.print(BackendInstaller.name, "Virtual environment ready")
             return venv_dir
 
-        # 3) 需要同步安装
         uv_cmd = BackendInstaller._resolve_uv_cmd()
         if uv_cmd is None:
             ConsolePrinter.print(BackendInstaller.name, "uv not found, installing with pip (user)...")
@@ -472,7 +661,6 @@ class BackendInstaller:
         ConsolePrinter.print(BackendInstaller.name, "Installing backend dependencies...")
 
         env = os.environ.copy()
-        # 强制复制，避免硬链接警告；如需进一步加速，可把 UV_CACHE_DIR 指到与项目同盘
         env.setdefault("UV_LINK_MODE", "copy")
 
         try:
@@ -485,14 +673,11 @@ class BackendInstaller:
 
         ConsolePrinter.print(BackendInstaller.name, "Backend dependencies installed successfully")
 
-        # 校验 venv
         if not BackendInstaller._venv_ready(venv_dir):
             ConsolePrinter.print(BackendInstaller.name, "Virtual environment not created or python missing")
             sys.exit(1)
 
-        # 写入哨兵：记录当前锁文件状态
         BackendInstaller._write_stamp(backend_dir, venv_dir)
-
         ConsolePrinter.print(BackendInstaller.name, "Virtual environment ready")
         return venv_dir
 
@@ -501,24 +686,28 @@ class FrontendInstaller:
     name = "FrontendInstaller"
 
     @staticmethod
-    @staticmethod
-    def _stream(cmd, env, cwd=None):
-        # === 新增：定义需忽略的噪声行模式 ===
-        NOISE_PATTERNS = [
-            r"^Source path:\s+.*frontend[\\/].*\.vue\?vue&type=style.*$",  # 你的这类 "Source path: ... .vue?vue&type=style..."
-            r"^\s*JIT TOTAL:\s+\d+(\.\d+)?ms\s*$",  # "JIT TOTAL: 31.995ms"
-        ]
+    def _stream(cmd: List[str], env: dict, cwd: Optional[str] = None) -> int:
+        NOISE_PATTERNS = []
         _noise = [re.compile(p) for p in NOISE_PATTERNS]
 
         proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,  # 二进制模式，后面手动解码，防乱码
+            bufsize=0,
         )
         assert proc.stdout is not None
-        for line in proc.stdout:
-            # === 新增：匹配则跳过打印 ===
-            if any(rx.search(line) for rx in _noise):
+        for raw in iter(proc.stdout.readline, b""):
+            line = decode_best_effort(raw)
+            plain = strip_ansi(line).strip()
+            if not plain:
                 continue
-            print(line.rstrip("\n"), flush=True)
+            if any(rx.search(plain) for rx in _noise):
+                continue
+            ConsolePrinter.raw_from_proc("pnpm", line)
         proc.wait()
         return proc.returncode
 
@@ -666,7 +855,6 @@ class FrontendInstaller:
             sys.exit(1)
 
 
-# ========= 进程/端口与服务模块化 =========
 class ProcessUtils:
     name = "ProcessUtils"
 
@@ -769,6 +957,35 @@ class PortGuard:
         return False
 
 
+# === 通用子进程输出抓取器 ===
+class ProcStreamer:
+    def __init__(self, name: str, proc: subprocess.Popen, suppress: Optional[List[re.Pattern]] = None):
+        self.name = name
+        self.proc = proc
+        self.suppress = suppress or []
+        self.thread = threading.Thread(target=self._pump, daemon=True)
+        self.thread.start()
+
+    def _pump(self):
+        try:
+            assert self.proc.stdout is not None
+            # 逐行读取，但先规范掉多余的 \r\n；若一行内仍含多行，继续拆分
+            for raw in iter(self.proc.stdout.readline, b""):
+                line = decode_best_effort(raw).rstrip("\r\n")
+
+                # 过滤空白/ANSI-only 行
+                if strip_ansi(line).strip() == "":
+                    continue
+
+                # 某些进程一次性输出多行（带内嵌 \n），拆分后逐条处理
+                for part in line.splitlines():
+                    if strip_ansi(part).strip() == "":
+                        continue
+                    ConsolePrinter.raw_from_proc(self.name, part)
+        except Exception as e:
+            ConsolePrinter.print(self.name, f"[pump] error: {e}")
+
+
 class RedisService:
     name = "RedisService"
 
@@ -776,6 +993,7 @@ class RedisService:
         self.port_guard = port_guard
         self.port = port
         self.proc: Optional[subprocess.Popen] = None
+        self.stream: Optional[ProcStreamer] = None
 
     def start(self, redis_path: str) -> bool:
         redis_server = Path(redis_path) / "redis-server.exe"
@@ -793,9 +1011,13 @@ class RedisService:
         try:
             self.proc = subprocess.Popen(
                 [str(redis_server)],
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
                 cwd=str(redis_path),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=False,  # 二进制模式
+                bufsize=0,
             )
+            self.stream = ProcStreamer("Redis", self.proc)
             time.sleep(2)
             ConsolePrinter.print(self.name, "Redis started successfully")
             return True
@@ -808,6 +1030,7 @@ class RedisService:
         if self.proc and self.proc.poll() is None:
             ProcessUtils.terminate_tree(self.proc.pid)
         self.proc = None
+        self.stream = None
 
 
 class BackendService:
@@ -818,13 +1041,13 @@ class BackendService:
         self.port = port
         self.host = host
         self.proc: Optional[subprocess.Popen] = None
+        self.stream: Optional[ProcStreamer] = None
 
     def start(self, project_root: Path):
         backend_dir = project_root / "backend"
 
-        # 优先使用环境变量 BACKEND_PYTHON_EXE 指定的解释器（如果存在且有效）
         override_py = (os.getenv("BACKEND_PYTHON_EXE") or "").strip()
-        venv_python: Path | None = None
+        venv_python: Optional[Path] = None
         if override_py:
             override_py = os.path.expanduser(override_py)
             venv_python = Path(override_py)
@@ -837,7 +1060,6 @@ class BackendService:
                 )
                 venv_python = None
 
-        # 如果没有指定 override 或 override 无效，优先使用 backend/.venv 中的 python
         if venv_python is None:
             venv_python = (
                 backend_dir
@@ -852,16 +1074,17 @@ class BackendService:
                 )
                 venv_python = Path(sys.executable)
 
-        # 确保端口空闲
         self.port_guard.ensure_free(self.port)
 
-        # 读取后端环境
         env_path_local = backend_dir / ".env.dev"
         load_dotenv(dotenv_path=env_path_local, override=True)
         ConsolePrinter.print(self.name, f"REDIS_URL set to {os.getenv('REDIS_URL')}")
 
         env = os.environ.copy()
         env["ENV"] = "DEV"
+        # 关键：强制 Python 子进程用 UTF-8 写日志/标准流，避免 GBK
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
 
         ConsolePrinter.print(self.name, f"Starting backend server on {self.host}:{self.port} ...")
         self.proc = subprocess.Popen(
@@ -879,11 +1102,17 @@ class BackendService:
                 "60",
                 "--ws-ping-timeout",
                 "120",
+                "--log-level",
+                "info",
             ],
             cwd=str(backend_dir),
             env=env,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,  # 二进制模式
+            bufsize=0,
         )
+        self.stream = ProcStreamer("Uvicorn", self.proc)
 
         if not self.port_guard.wait_until_open(self.port):
             ConsolePrinter.print(self.name, f"Backend failed to start on port {self.port}")
@@ -900,6 +1129,12 @@ class FrontendService:
         self.port = port
         self.host = host
         self.proc: Optional[subprocess.Popen] = None
+        self.stream: Optional[ProcStreamer] = None
+
+    @staticmethod
+    def _noise_patterns() -> List[re.Pattern]:
+        pats = []
+        return [re.compile(p) for p in pats]
 
     def start(self, project_root: Path):
         frontend_dir = project_root / "frontend"
@@ -911,7 +1146,6 @@ class FrontendService:
             ConsolePrinter.print(self.name, f"Node.js path invalid: {self.nodejs_path}")
             sys.exit(1)
 
-        # 确保端口空闲
         self.port_guard.ensure_free(self.port)
 
         env = os.environ.copy()
@@ -934,12 +1168,19 @@ class FrontendService:
                 "--host",
                 self.host,
                 "--logLevel",
-                "info",  # "warn"
+                "info",
             ],
             shell=False,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             env=env,
+            cwd=str(frontend_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,  # 二进制模式
+            bufsize=0,
         )
+
+        suppress = self._noise_patterns()
+        self.stream = ProcStreamer("Vite", self.proc, suppress=suppress)
 
         if not self.port_guard.wait_until_open(self.port):
             ConsolePrinter.print(self.name, f"Frontend failed to start on port {self.port}")
@@ -947,9 +1188,12 @@ class FrontendService:
         ConsolePrinter.print(self.name, f"Frontend successfully started on port {self.port}")
 
     def stop(self):
-        if self.proc and self.proc.poll() is None:
+        if self.proc and self.proc.poll() is not None:
+            return
+        if self.proc:
             ProcessUtils.terminate_tree(self.proc.pid)
         self.proc = None
+        self.stream = None
 
 
 class ServiceSupervisor:
@@ -972,6 +1216,86 @@ class ServiceSupervisor:
         ConsolePrinter.print(self.name, "All services stopped.")
 
 
+# ========= 源码快照到 launcher/（与日志编号一致） =========
+class PySourceDumper:
+    IGNORE_FOLDERS = {".git", "__pycache__", ".venv", "env", "venv"}
+    IGNORE_FILES = {"py_contents.py", "__init__.py"}
+
+    @staticmethod
+    def _generate_directory_structure(startpath: Path, indent: str = "") -> str:
+        """
+        生成目录结构（仅 .py 文件），按文件夹→文件排序
+        """
+        structure = ""
+        try:
+            items = sorted(list(startpath.iterdir()), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except FileNotFoundError:
+            return structure
+
+        if not items:
+            return f"{indent}|-- (空目录)\n"
+
+        for item in items:
+            if item.is_dir():
+                if item.name in PySourceDumper.IGNORE_FOLDERS:
+                    continue
+                structure += f"{indent}|-- 文件夹: {item.name}\n"
+                structure += PySourceDumper._generate_directory_structure(item, indent + "|   ")
+            else:
+                if item.suffix == ".py" and item.name not in PySourceDumper.IGNORE_FILES:
+                    structure += f"{indent}|-- 文件: {item.name}\n"
+        return structure
+
+    @staticmethod
+    def _clean_content(content: str) -> str:
+        # 原样返回：无需清洗，保持源码完整
+        return content
+
+    @staticmethod
+    def _iter_py_files(root: Path):
+        for cur_root, dirs, files in os.walk(root):
+            # 过滤目录
+            dirs[:] = [d for d in dirs if d not in PySourceDumper.IGNORE_FOLDERS]
+            # 只要 .py
+            py_files = [f for f in files if f.endswith(".py") and f not in PySourceDumper.IGNORE_FILES]
+            py_files.sort(key=lambda x: x.lower())
+            for fname in py_files:
+                yield Path(cur_root) / fname
+
+    @staticmethod
+    def write_backend_app_snapshot(project_root: Path, out_txt: Path):
+        """
+        将 backend/app 下所有 .py 源码快照写入 out_txt。
+        文件名应形如：后端现有的项目源码_NNN.txt（NNN 与本次 launcher 日志编号一致）
+        """
+        scan_dir = project_root / "backend" / "app"
+        out_txt.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(out_txt, "w", encoding="utf-8") as fp:
+            # 目录结构
+            fp.write("目录结构 (仅 .py 文件):\n")
+            fp.write(PySourceDumper._generate_directory_structure(scan_dir))
+            fp.write("\n\n")
+
+            # 源码正文
+            sep = "=" * 80
+            for fpath in PySourceDumper._iter_py_files(scan_dir):
+                try:
+                    try:
+                        content = fpath.read_text(encoding="utf-8")
+                    except (UnicodeDecodeError, IsADirectoryError):
+                        content = fpath.read_text(encoding="latin1")
+                except Exception:
+                    continue
+
+                cleaned = PySourceDumper._clean_content(content)
+                fp.write(f"{sep}\n")
+                fp.write(f"{fpath} 的内容:\n")
+                fp.write(f"{sep}\n")
+                fp.write(cleaned)
+                fp.write("\n\n")
+
+
 # ========= 启动器 =========
 class MathModelAgentLauncher:
     name = "Launcher"
@@ -979,60 +1303,96 @@ class MathModelAgentLauncher:
     def __init__(self):
         self.project_root = Path.cwd()
         self.cfg = ConfigManager(self.project_root / ".env")
-        self.port_guard = PortGuard()  # 新：端口管理
+        self.port_guard = PortGuard()
+
+        # === 初始化全局日志器 ===
+        global _GLOBAL_LOGGER
+        _GLOBAL_LOGGER = _GlobalFileLogger(self.project_root)
+        ConsolePrinter.print(self.name, f"Log file: {_GLOBAL_LOGGER.path}")
+
+        # 与日志同编号输出源码快照到 backend/logs/launcher/
+        try:
+            base = _GLOBAL_LOGGER.path.stem  # 例如 "002"
+            snapshot_path = _GLOBAL_LOGGER.path.parent / f"后端现有的项目源码_{base}.txt"
+            PySourceDumper.write_backend_app_snapshot(self.project_root, snapshot_path)
+            ConsolePrinter.print(self.name, f"Wrote backend/app sources to {snapshot_path}")
+        except Exception as e:
+            ConsolePrinter.print(self.name, f"Source snapshot failed: {e}")
 
     def run(self):
-        CacheCleaner.clear(self.project_root)
-
-        # 选路径
-        redis_path = PathPicker.pick_and_validate(
-            self.cfg,
-            "REDIS_PATH",
-            "选择 Redis 安装目录（需包含 redis-server.exe、redis-cli.exe）",
-            ["redis-server.exe", "redis-cli.exe"],
-        )
-        nodejs_path = PathPicker.pick_and_validate(
-            self.cfg, "NODEJS_PATH", "选择 Node.js 安装目录（需包含 node.exe、npm.cmd）", ["node.exe", "npm.cmd"]
-        )
-
-        # .env 准备 + 后端依赖安装 + 前端依赖安装
-        EnvFileManager.copy_envs(self.project_root)
-        _ = BackendInstaller.install(self.project_root)
-
-        backend_port = int(os.getenv("BACKEND_PORT", "8000"))
-        frontend_port = int(os.getenv("FRONTEND_PORT", "5173"))
-
-        FrontendInstaller.install(self.project_root, nodejs_path, self.cfg)
-
-        # 服务实例
-        redis = RedisService(self.port_guard, port=6379)
-        backend = BackendService(self.port_guard, port=backend_port, host="localhost")
-        frontend = FrontendService(self.port_guard, nodejs_path=nodejs_path, port=frontend_port, host="localhost")
-        supervisor = ServiceSupervisor(backend, frontend, redis)
-
-        # 启动
-        if not redis.start(redis_path):
-            sys.exit(1)
-
-        backend.start(self.project_root)
-        frontend.start(self.project_root)
-
-        ConsolePrinter.print(self.name, f"Backend running at http://localhost:{backend_port}")
-        ConsolePrinter.print(self.name, f"Frontend running at http://localhost:{frontend_port}")
-
+        supervisor: Optional[ServiceSupervisor] = None
         try:
-            while True:
-                time.sleep(1)
-                if frontend.proc and frontend.proc.poll() is not None:
-                    raise RuntimeError("Frontend crashed")
-                if backend.proc and backend.proc.poll() is not None:
-                    raise RuntimeError("Backend crashed")
-        except RuntimeError as e:
-            ConsolePrinter.print(self.name, f"Shutting down due to {e}")
-        finally:
-            supervisor.shutdown_all()
             CacheCleaner.clear(self.project_root)
+
+            # 选路径
+            redis_path = PathPicker.pick_and_validate(
+                self.cfg,
+                "REDIS_PATH",
+                "选择 Redis 安装目录（需包含 redis-server.exe、redis-cli.exe）",
+                ["redis-server.exe", "redis-cli.exe"],
+            )
+            nodejs_path = PathPicker.pick_and_validate(
+                self.cfg, "NODEJS_PATH", "选择 Node.js 安装目录（需包含 node.exe、npm.cmd）", ["node.exe", "npm.cmd"]
+            )
+
+            # .env + 依赖
+            EnvFileManager.copy_envs(self.project_root)
+            _ = BackendInstaller.install(self.project_root)
+
+            backend_port = int(os.getenv("BACKEND_PORT", "8000"))
+            frontend_port = int(os.getenv("FRONTEND_PORT", "5173"))
+
+            FrontendInstaller.install(self.project_root, nodejs_path, self.cfg)
+
+            # 服务实例
+            redis = RedisService(self.port_guard, port=6379)
+            backend = BackendService(self.port_guard, port=backend_port, host="localhost")
+            frontend = FrontendService(self.port_guard, nodejs_path=nodejs_path, port=frontend_port, host="localhost")
+            supervisor = ServiceSupervisor(backend, frontend, redis)
+
+            # 启动
+            if not redis.start(redis_path):
+                sys.exit(1)
+
+            backend.start(self.project_root)
+            frontend.start(self.project_root)
+
+            ConsolePrinter.print(self.name, f"Backend running at http://localhost:{backend_port}")
+            ConsolePrinter.print(self.name, f"Frontend running at http://localhost:{frontend_port}")
+
+            # 守护循环
+            try:
+                back_fail, front_fail = 0, 0
+                while True:
+                    time.sleep(1)
+
+                    back_ok = self.port_guard._is_open_localhost(backend_port)
+                    front_ok = self.port_guard._is_open_localhost(frontend_port)
+
+                    back_fail = 0 if back_ok else back_fail + 1
+                    front_fail = 0 if front_ok else front_fail + 1
+
+                    if backend.proc and backend.proc.poll() is not None and back_fail >= 3:
+                        raise RuntimeError("Backend crashed")
+                    if frontend.proc and frontend.proc.poll() is not None and front_fail >= 3:
+                        raise RuntimeError("Frontend crashed")
+            except KeyboardInterrupt:
+                ConsolePrinter.print(self.name, "KeyboardInterrupt -> 正在优雅退出...")
+            except RuntimeError as e:
+                ConsolePrinter.print(self.name, f"Shutting down due to {e}")
+
+        except KeyboardInterrupt:
+            ConsolePrinter.print(self.name, "KeyboardInterrupt during startup -> 正在优雅退出...")
+        finally:
+            if supervisor is not None:
+                supervisor.shutdown_all()
+            CacheCleaner.clear(self.project_root)
+            if _GLOBAL_LOGGER:
+                _GLOBAL_LOGGER.close()
 
 
 if __name__ == "__main__":
-    MathModelAgentLauncher().run()
+    try:
+        MathModelAgentLauncher().run()
+    except KeyboardInterrupt:
+        pass
