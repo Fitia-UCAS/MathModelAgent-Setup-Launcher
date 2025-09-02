@@ -1,9 +1,14 @@
 # app/utils/cli.py
 
+# 1 导入依赖
 from textwrap import dedent
 
 
+# 2 居中输出工具
 def center_cli_str(text: str, width: int | None = None):
+    """
+    将多行字符串在终端中居中显示。
+    """
     import shutil
 
     width = width or shutil.get_terminal_size().columns
@@ -12,7 +17,11 @@ def center_cli_str(text: str, width: int | None = None):
     return "\n".join((line + " " * (max_line_len - len(line))).center(width) for line in lines)
 
 
+# 3 ASCII Banner
 def get_ascii_banner(center: bool = True) -> str:
+    """
+    获取 ASCII 艺术风格的横幅，可选择是否居中。
+    """
     text = dedent(
         r"""
         ===============================================================================
@@ -27,7 +36,4 @@ def get_ascii_banner(center: bool = True) -> str:
         ===============================================================================
         """,
     ).strip()
-    if center:
-        return center_cli_str(text)
-    else:
-        return text
+    return center_cli_str(text) if center else text

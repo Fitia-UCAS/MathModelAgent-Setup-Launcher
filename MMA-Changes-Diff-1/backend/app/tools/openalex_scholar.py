@@ -1,55 +1,49 @@
 # app/tools/openalex_scholar.py
 
+# 1 导入依赖
 import requests
 from typing import List, Dict, Any, Tuple
 from app.services.redis_manager import redis_manager
 from app.schemas.response import ScholarMessage
 
 
+# 2 OpenAlexScholar
+# 2.1 目的：封装 OpenAlex API 请求，支持论文检索、摘要解析、引用格式化等
 class OpenAlexScholar:
     def __init__(self, task_id: str, email: str = None):
-        """Initialize OpenAlex client.
-
-        Args:
-            email: Optional email for better API service
-        """
         self.base_url = "https://api.openalex.org"
         self.email = email
         self.task_id = task_id
 
+    # 2.2 构造请求 URL
     def _get_request_url(self, endpoint: str) -> str:
-        """Construct request URL with email parameter if provided."""
         if endpoint.startswith("/"):
             endpoint = endpoint[1:]
         return f"{self.base_url}/{endpoint}"
 
+    # 2.3 从 abstract_inverted_index 重建摘要
     def _get_abstract_from_index(self, abstract_inverted_index: Dict) -> str:
-        """从abstract_inverted_index中重建摘要文本"""
         if not abstract_inverted_index:
             return ""
-
         max_position = 0
         for positions in abstract_inverted_index.values():
             if positions and max(positions) > max_position:
                 max_position = max(positions)
-
         words = [""] * (max_position + 1)
-
         for word, positions in abstract_inverted_index.items():
             for position in positions:
                 words[position] = word
-
         return " ".join(words).strip()
 
+    # 2.4 搜索论文
     async def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
-        """Search for papers using OpenAlex API."""
         base_url = self._get_request_url("works")
         params = {
             "search": query,
             "per_page": limit,
-            "select": "id,title,display_name,authorships,cited_by_count,doi,publication_year,biblio,abstract_inverted_index,host_venue,primary_location",
+            "select": "id,title,display_name,authorships,cited_by_count,doi,publication_year,"
+            "biblio,abstract_inverted_index,host_venue,primary_location",
         }
-
         if self.email:
             params["mailto"] = self.email
         else:
@@ -58,20 +52,16 @@ class OpenAlexScholar:
         headers = {"User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})" if self.email else "OpenAlexScholar/1.0"}
 
         try:
-            print(f"请求 URL: {base_url} 参数: {params}")
             response = requests.get(base_url, params=params, headers=headers)
-            print(f"响应状态: {response.status_code}")
             response.raise_for_status()
             results = response.json()
         except requests.exceptions.HTTPError as e:
-            print(f"HTTP 错误: {e}")
             if response.status_code == 403:
-                print("提示: 403错误通常意味着您需要提供有效的邮箱地址或者遵循礼貌池（polite pool）规则")
+                print("提示: 403错误通常意味着需要提供有效邮箱或遵循 polite pool 规则")
             if hasattr(response, "text"):
                 print(f"响应内容: {response.text}")
             raise
         except Exception as e:
-            print(f"请求出错: {e}")
             raise
 
         papers = []
@@ -123,8 +113,8 @@ class OpenAlexScholar:
         )
         return papers
 
+    # 2.5 文献转字符串（便于直接展示）
     def papers_to_str(self, papers: List[Dict[str, Any]]) -> str:
-        """将文献列表转换为字符串"""
         result = ""
         for paper in papers:
             result += "\n" + "=" * 100
@@ -139,36 +129,32 @@ class OpenAlexScholar:
             result += "=" * 100
         return result
 
+    # 2.6 格式化引用
     def _format_citation(self, work: Dict[str, Any]) -> str:
-        """Format citation in a readable format."""
         authors = [
             authorship.get("author", {}).get("display_name")
             for authorship in work.get("authorships", [])
             if authorship.get("author")
         ]
-
         if len(authors) > 3:
             authors_str = f"{authors[0]} et al."
         else:
             authors_str = ", ".join(authors)
-
         title = work.get("display_name") or work.get("title", "")
         year = work.get("publication_year", "")
         doi = work.get("doi", "")
-
         citation = f"{authors_str} ({year}). {title}."
         if doi:
             citation += f" DOI: {doi}"
         return citation
 
 
-# ========= 源头就生成 footnote tuple =========
+# 3 辅助方法
+# 3.1 将论文转为 (citation_text, url) tuple，便于 WriterResponse 使用
 def paper_to_footnote_tuple(paper: Dict[str, Any]) -> Tuple[str, str]:
-    """将论文转成 (citation_text, url)，保证 WriterResponse 类型安全"""
     title = str(paper.get("title") or "")
     year = str(paper.get("publication_year") or "")
 
-    # 简化作者展示
     authors = paper.get("authors") or []
     author_names = [a.get("name") for a in authors if isinstance(a, dict) and a.get("name")]
     authors_str = ""
@@ -198,4 +184,5 @@ def paper_to_footnote_tuple(paper: Dict[str, Any]) -> Tuple[str, str]:
         loc = paper.get("primary_location") or {}
         if isinstance(loc, dict):
             url = loc.get("landing_page_url") or loc.get("pdf_url") or ""
+
     return citation_text.strip(), url.strip()

@@ -22,20 +22,25 @@ from pydantic import BaseModel
 import litellm
 from app.config.setting import settings
 
+# 1 路由初始化
 router = APIRouter()
 
 
+# 2 数据模型
+# 2.1 API Key 验证请求
 class ValidateApiKeyRequest(BaseModel):
     api_key: str
     base_url: str = "https://api.openai.com/v1"
     model_id: str
 
 
+# 2.2 API Key 验证响应
 class ValidateApiKeyResponse(BaseModel):
     valid: bool
     message: str
 
 
+# 2.3 保存各 Agent 的 API 配置请求
 class SaveApiConfigRequest(BaseModel):
     coordinator: dict
     modeler: dict
@@ -43,28 +48,32 @@ class SaveApiConfigRequest(BaseModel):
     writer: dict
 
 
+# 3 保存配置：POST /save-api-config
 @router.post("/save-api-config")
 async def save_api_config(request: SaveApiConfigRequest):
     """
     保存验证成功的 API 配置到 settings
     """
     try:
-        # 更新各个模块的设置
+        # 3.1 Coordinator
         if request.coordinator:
             settings.COORDINATOR_API_KEY = request.coordinator.get("apiKey", "")
             settings.COORDINATOR_MODEL = request.coordinator.get("modelId", "")
             settings.COORDINATOR_BASE_URL = request.coordinator.get("baseUrl", "")
 
+        # 3.2 Modeler
         if request.modeler:
             settings.MODELER_API_KEY = request.modeler.get("apiKey", "")
             settings.MODELER_MODEL = request.modeler.get("modelId", "")
             settings.MODELER_BASE_URL = request.modeler.get("baseUrl", "")
 
+        # 3.3 Coder
         if request.coder:
             settings.CODER_API_KEY = request.coder.get("apiKey", "")
             settings.CODER_MODEL = request.coder.get("modelId", "")
             settings.CODER_BASE_URL = request.coder.get("baseUrl", "")
 
+        # 3.4 Writer
         if request.writer:
             settings.WRITER_API_KEY = request.writer.get("apiKey", "")
             settings.WRITER_MODEL = request.writer.get("modelId", "")
@@ -76,13 +85,14 @@ async def save_api_config(request: SaveApiConfigRequest):
         raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")
 
 
+# 4 验证 API Key：POST /validate-api-key
 @router.post("/validate-api-key", response_model=ValidateApiKeyResponse)
 async def validate_api_key(request: ValidateApiKeyRequest):
     """
     验证 API Key 的有效性
     """
     try:
-        # 使用 litellm 发送测试请求
+        # 4.1 使用 litellm 发送测试请求
         await litellm.acompletion(
             model=request.model_id,
             messages=[{"role": "user", "content": "Hi"}],
@@ -90,12 +100,12 @@ async def validate_api_key(request: ValidateApiKeyRequest):
             api_key=request.api_key,
             base_url=request.base_url if request.base_url != "https://api.openai.com/v1" else None,
         )
-
         return ValidateApiKeyResponse(valid=True, message="✓ 模型 API 验证成功")
+
     except Exception as e:
         error_msg = str(e)
 
-        # 解析不同类型的错误
+        # 4.2 常见错误码解析
         if "401" in error_msg or "Unauthorized" in error_msg:
             return ValidateApiKeyResponse(valid=False, message="✗ API Key 无效或已过期")
         elif "404" in error_msg or "Not Found" in error_msg:
@@ -105,32 +115,39 @@ async def validate_api_key(request: ValidateApiKeyRequest):
         elif "403" in error_msg or "Forbidden" in error_msg:
             return ValidateApiKeyResponse(valid=False, message="✗ API 权限不足或账户余额不足")
         else:
-            return ValidateApiKeyResponse(valid=False, message=f"✗ 验证失败: {error_msg[:200]}...")
+            return ValidateApiKeyResponse(valid=False, message=f"✗ 验证失败: {error_msg[:2000]}...")
 
 
+# 5 示例任务：POST /example
 @router.post("/example")
 async def exampleModeling(
     example_request: ExampleRequest,
     background_tasks: BackgroundTasks,
 ):
+    # 5.1 生成任务 ID 与工作目录
     task_id = create_task_id()
     work_dir = create_work_dir(task_id)
+
+    # 5.2 读取示例题面
     example_dir = os.path.join("app", "example", "example", example_request.source)
     ic(example_dir)
     with open(os.path.join(example_dir, "questions.txt"), "r", encoding="utf-8") as f:
         ques_all = f.read()
 
+    # 5.3 拷贝示例数据到工作目录
     current_files = get_current_files(example_dir, "data")
     for file in current_files:
         src_file = os.path.join(example_dir, file)
         dst_file = os.path.join(work_dir, file)
         with open(src_file, "rb") as src, open(dst_file, "wb") as dst:
             dst.write(src.read())
-    # 存储任务ID
+
+    # 5.4 存储任务 ID（便于前端订阅/轮询）
     await redis_manager.set(f"task_id:{task_id}", task_id)
 
     logger.info(f"Adding background task for task_id: {task_id}")
-    # 将任务添加到后台执行
+
+    # 5.5 启动后台任务
     background_tasks.add_task(
         run_modeling_task_async,
         task_id,
@@ -141,18 +158,20 @@ async def exampleModeling(
     return {"task_id": task_id, "status": "processing"}
 
 
+# 6 用户建模：POST /modeling
 @router.post("/modeling")
 async def modeling(
     background_tasks: BackgroundTasks,
-    ques_all: str = Form(...),  # 从表单获取
-    comp_template: CompTemplate = Form(...),  # 从表单获取
-    format_output: FormatOutPut = Form(...),  # 从表单获取
+    ques_all: str = Form(...),
+    comp_template: CompTemplate = Form(...),
+    format_output: FormatOutPut = Form(...),
     files: list[UploadFile] = File(default=None),
 ):
+    # 6.1 生成任务 ID 与工作目录
     task_id = create_task_id()
     work_dir = create_work_dir(task_id)
 
-    # 如果有上传文件，保存文件
+    # 6.2 保存上传文件
     if files:
         logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
         for file in files:
@@ -160,7 +179,6 @@ async def modeling(
                 data_file_path = os.path.join(work_dir, file.filename)
                 logger.info(f"保存文件: {file.filename} -> {data_file_path}")
 
-                # 确保文件名不为空
                 if not file.filename:
                     logger.warning("跳过空文件名")
                     continue
@@ -180,15 +198,17 @@ async def modeling(
     else:
         logger.warning("没有上传文件")
 
-    # 存储任务ID
+    # 6.3 存储任务 ID
     await redis_manager.set(f"task_id:{task_id}", task_id)
 
     logger.info(f"Adding background task for task_id: {task_id}")
-    # 将任务添加到后台执行
+
+    # 6.4 启动后台任务
     background_tasks.add_task(run_modeling_task_async, task_id, ques_all, comp_template, format_output)
     return {"task_id": task_id, "status": "processing"}
 
 
+# 7 后台执行：run_modeling_task_async
 async def run_modeling_task_async(
     task_id: str,
     ques_all: str,
@@ -197,6 +217,7 @@ async def run_modeling_task_async(
 ):
     logger.info(f"run modeling task for task_id: {task_id}")
 
+    # 7.1 构造 Problem
     problem = Problem(
         task_id=task_id,
         ques_all=ques_all,
@@ -204,22 +225,23 @@ async def run_modeling_task_async(
         format_output=format_output,
     )
 
-    # 发送任务开始状态
+    # 7.2 发送“开始处理”状态
     await redis_manager.publish_message(
         task_id,
         SystemMessage(content="任务开始处理"),
     )
 
-    # 给一个短暂的延迟，确保 WebSocket 有机会连接
+    # 7.3 短暂延迟，保证 WebSocket 连接建立
     await asyncio.sleep(1)
 
-    # 创建任务并保护其不被上层取消；通过回调统一发送“完成/失败”
+    # 7.4 启动工作流（受 shield 保护，不被上层取消）
     task = asyncio.create_task(MathModelWorkFlow().execute(problem))
 
+    # 7.5 完成回调：成功→广播成功并生成 DOCX；失败→广播错误
     def _on_done(t: asyncio.Task):
         async def _notify():
             try:
-                t.result()  # 触发异常若有
+                t.result()
                 await redis_manager.publish_message(
                     task_id,
                     SystemMessage(content="任务处理完成", type="success"),
@@ -235,7 +257,7 @@ async def run_modeling_task_async(
 
     task.add_done_callback(_on_done)
 
-    # 等待最多 600 分钟，但即使超时也不取消底层任务（继续后台执行）
+    # 7.6 最长等待 600 分钟；超时则转后台继续
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=36000)
     except asyncio.TimeoutError:

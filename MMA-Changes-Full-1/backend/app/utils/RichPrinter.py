@@ -1,5 +1,6 @@
 # app/utils/RichPrinter.py
 
+# 1 导入依赖
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -9,8 +10,9 @@ from rich import print as rprint
 from app.utils.log_util import logger
 
 
+# 2 富文本打印工具
 class RichPrinter:
-    # 类属性：全局样式配置
+    # 2.1 样式配置
     _styles = {
         "success": {"emoji": "✅", "color": "green", "prefix": "成功"},
         "error": {"emoji": "❌", "color": "red", "prefix": "错误"},
@@ -19,9 +21,10 @@ class RichPrinter:
         "debug": {"emoji": "🐞", "color": "magenta", "prefix": "调试"},
     }
 
-    # 共享的 Console 实例（线程安全）
+    # 2.2 Console 实例
     _console = Console()
 
+    # 2.3 格式化消息
     @classmethod
     def _format_message(
         cls,
@@ -45,6 +48,7 @@ class RichPrinter:
         formatted.append(message, style=color)
         return formatted
 
+    # 2.4 快捷消息接口
     @classmethod
     def success(cls, message: str, **kwargs):
         cls._print_panel(message, style_type="success", **kwargs)
@@ -57,6 +61,7 @@ class RichPrinter:
     def warning(cls, message: str, **kwargs):
         cls._print_panel(message, style_type="warning", **kwargs)
 
+    # 2.5 Agent 消息
     @staticmethod
     def print_agent_msg(message: str, agent_name: str):
         logger.info(f"{agent_name}: {message}")
@@ -69,6 +74,7 @@ class RichPrinter:
         else:
             rprint(f"[bold white]{agent_name}[/bold white]: {message}")
 
+    # 2.6 面板消息
     @classmethod
     def _print_panel(
         cls,
@@ -90,6 +96,7 @@ class RichPrinter:
         panel_args = {**default_panel_args, **(panel_kwargs or {})}
         cls._console.print(Panel.fit(text, **panel_args))
 
+    # 2.7 表格输出
     @classmethod
     def table(
         cls,
@@ -110,10 +117,11 @@ class RichPrinter:
 
         cls._console.print(table)
 
+    # 2.8 工作流开始/结束
     @classmethod
     def workflow_start(cls):
         """打印工作流开始信息"""
-        cls._console.print()  # 添加前置换行
+        cls._console.print()
         formatted = Text()
         formatted.append("🚀 ", style="bold")
         formatted.append("开始执行工作流", style="bold blue")
@@ -123,17 +131,18 @@ class RichPrinter:
     @classmethod
     def workflow_end(cls):
         """打印工作流结束信息"""
-        cls._console.print()  # 添加前置换行
+        cls._console.print()
         formatted = Text()
         formatted.append("✨ ", style="bold")
         formatted.append("工作流执行完成", style="bold green")
         cls._console.print(Panel.fit(formatted, border_style="green", padding=(1, 4)))
         logger.info("\n=======================工作流执行完成=======================\n")
 
+    # 2.9 Agent 开始/结束
     @classmethod
     def agent_start(cls, agent_name: str):
         """打印 Agent 开始信息"""
-        cls._console.print()  # 添加前置换行
+        cls._console.print()
         formatted = Text()
         formatted.append("🤖 ", style="bold")
         formatted.append(f"Agent: {agent_name} ", style="bold cyan")
@@ -144,7 +153,7 @@ class RichPrinter:
     @classmethod
     def agent_end(cls, agent_name: str):
         """打印 Agent 结束信息"""
-        cls._console.print()  # 添加前置换行
+        cls._console.print()
         formatted = Text()
         formatted.append("✨ ", style="bold")
         formatted.append(f"Agent: {agent_name} ", style="bold cyan")

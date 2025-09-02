@@ -10,3 +10,6 @@ backend/app/.DS_Store
 
 ques/*
 tools/*
+*.bak
+*.log
+.env

@@ -8,21 +8,25 @@ import json
 import uuid
 
 
+# 1 初始化与成员
+# 1.1 work_dir: 工作目录
+# 1.2 ques_count: 小问数量
+# 1.3 res: 存放各章节生成结果的字典，格式 { key: {"response_content": str, "footnotes": list[str]} }
+# 1.4 footnotes: 全局脚注映射 { uuid: {"content": str, "number": int?} }
 class UserOutput:
     def __init__(self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None):
         self.work_dir = work_dir
-        # 存储各小节结果：{ key: {"response_content": str, "footnotes": list[str]} }
         self.res: dict[str, dict] = {}
         self.data_recorder = data_recorder
         self.cost_time = 0.0
         self.initialized = True
         self.ques_count: int = ques_count
-        # 全局脚注：{ uuid: {"content": str, "number": int?} }
         self.footnotes: dict[str, dict] = {}
         self._init_seq()
 
+    # 2 章节序列初始化
+    # 2.1 用于最终拼接的章节顺序：firstPage, RepeatQues, analysisQues, modelAssumption, symbol, eda, ques1..quesN, sensitivity_analysis, judge
     def _init_seq(self):
-        """按论文结构定义章节顺序；用于最终拼接"""
         ques_str = [f"ques{i}" for i in range(1, self.ques_count + 1)]
         self.seq = [
             "firstPage",  # 标题、摘要、关键词
@@ -36,8 +40,9 @@ class UserOutput:
             "judge",  # 模型评价、改进与推广
         ]
 
+    # 3 写入与获取结果
+    # 3.1 set_res: 写入某章节（接受 WriterResponse 或兼容 dict）
     def set_res(self, key: str, writer_response: WriterResponse):
-        """写入某个章节的生成结果"""
         if not isinstance(writer_response, WriterResponse):
             # 容错：允许传入兼容结构的字典
             try:
@@ -54,34 +59,28 @@ class UserOutput:
             "footnotes": fn,
         }
 
+    # 3.2 get_res: 返回当前所有章节结果（原样）
     def get_res(self):
         return self.res
 
+    # 3.3 get_model_build_solve: 拼接 quesX 的简短摘要供写作 prompt 使用
     def get_model_build_solve(self) -> str:
-        """
-        获取“模型建立与求解”的简要串，用于写作 prompt。
-        仅拼接各 quesX 的 response_content（截断到较短，以免 prompt 过长）。
-        """
         parts: list[str] = []
         for k, v in self.res.items():
             if k.startswith("ques"):
                 text = (v or {}).get("response_content", "") or ""
-                if len(text) > 400:
-                    text = text[:400] + "..."
+                if len(text) > 500:
+                    text = text[:1000] + "..."
                 parts.append(f"{k}: {text}")
         return " | ".join(parts)
 
-    # ============ 引用解析与合并 ============
+    # 4 引用解析（就地脚注 -> uuid）
+    # 4.1 replace_references_with_uuid:
+    #     - 匹配形如 {[^1]: 引用内容}，替换为 [<uuid>]，并将内容存进 self.footnotes（去重复用）
     def replace_references_with_uuid(self, text: str) -> str:
-        """
-        将文中形如 `{[^1]: 引用内容}` 的“就地引用定义”替换为 `[<uuid>]` 占位，
-        并把引用内容存入 self.footnotes[uuid] = {"content": ...}。
-        若相同内容已存在，则复用已有 uuid（去重）。
-        """
         if not text:
             return ""
 
-        # 匹配 {[^数字]: 引用内容}，允许跨行
         pattern = re.compile(r"\{\[\^(\d+)\]:\s*(.*?)\}", re.DOTALL)
 
         def _find_existing_uuid(content: str) -> str | None:
@@ -91,7 +90,6 @@ class UserOutput:
             return None
 
         def _repl(m: re.Match) -> str:
-            ref_num = m.group(1)
             ref_content = (m.group(2) or "").strip().rstrip(".").strip()
             if not ref_content:
                 return ""  # 空内容直接移除
@@ -106,26 +104,20 @@ class UserOutput:
 
         return pattern.sub(_repl, text)
 
+    # 5 UUID -> 编号并替换为 [^n]
+    # 5.1 sort_text_with_footnotes: 按 self.seq 顺序扫描，遇到 uuid 则分配逐次编号并替换正文中的占位
     def sort_text_with_footnotes(self, replace_res: dict) -> dict:
-        """
-        将各章节文本中的 [uuid] 按出现顺序重新编号为 [^1], [^2], ...
-        并在 self.footnotes[uuid]['number'] 写入编号。
-        """
         sort_res: dict = {}
         ref_index = 1
         for seq_key in self.seq:
-            # 章节缺失时用空串兜底
             section = replace_res.get(seq_key, {"response_content": ""})
             text = section.get("response_content", "") or ""
 
-            # 找所有 uuid 形式的引用
             uuid_list = re.findall(r"\[([a-f0-9-]{36})\]", text)
             for uid in uuid_list:
-                # 第一次见到该 uuid 才赋编号
                 if self.footnotes.get(uid) is not None and self.footnotes[uid].get("number") is None:
                     self.footnotes[uid]["number"] = ref_index
                     ref_index += 1
-                # 将所有该 uuid 的占位替换为 [^number]（若没编号，保持原样）
                 number = (self.footnotes.get(uid) or {}).get("number")
                 text = text.replace(f"[{uid}]", f"[^{number}]" if number else f"[{uid}]")
 
@@ -134,55 +126,45 @@ class UserOutput:
             }
         return sort_res
 
+    # 6 将编号脚注追加到文末
+    # 6.1 append_footnotes_to_text: 仅追加已分配编号的脚注，按编号顺序输出为 "## 参考文献" 下的条目
     def append_footnotes_to_text(self, text: str) -> str:
-        """
-        将全局脚注按编号追加到文末；仅输出已有 number 的脚注。
-        """
-        # 仅保留已编号的脚注
         numbered = [(u, d) for u, d in self.footnotes.items() if "number" in (d or {})]
         if not numbered:
             return text
 
         text += "\n\n## 参考文献"
-        # 按编号排序
         numbered.sort(key=lambda x: x[1]["number"])
         for _, footnote in numbered:
             text += f"\n\n[^{footnote['number']}]: {footnote['content']}"
         return text
 
-    # ============ 汇总/保存 ============
+    # 7 汇总与保存
+    # 7.1 get_result_to_save:
+    #     - 将每章节中的就地定义替换为 uuid（replace_references_with_uuid）
+    #     - 为 uuid 分配编号并替换为 [^n]（sort_text_with_footnotes）
+    #     - 拼接章节并追加脚注（append_footnotes_to_text）
     def get_result_to_save(self) -> str:
-        """
-        1) 将每个章节内联的 {[^n]: ...} 引用替换为 [uuid] 并汇总全局 footnotes
-        2) 按出现顺序给 uuid 赋编号，正文替换为 [^n]
-        3) 文末追加“参考文献”条目
-        """
         replace_res: dict[str, dict] = {}
 
-        # 逐章替换“就地引用定义”为 uuid
         for key in self.seq:
             section = self.res.get(key, {"response_content": ""})
             original = section.get("response_content", "") or ""
             new_text = self.replace_references_with_uuid(original)
             replace_res[key] = {"response_content": new_text}
 
-        # 按出现顺序编号 & 正文替换
         sort_res = self.sort_text_with_footnotes(replace_res)
-
-        # 按章节顺序拼接正文
         full_res_body = "\n\n".join(sort_res.get(k, {}).get("response_content", "") for k in self.seq)
-
-        # 追加参考文献
         full_res = self.append_footnotes_to_text(full_res_body)
         return full_res
 
+    # 7.2 save_result: 写入 res.json 与 res.md 到工作目录
     def save_result(self):
-        """保存 res.json 与 res.md 到工作目录"""
-        # 1) 保存结构化 JSON
+        # 保存结构化 JSON
         with open(os.path.join(self.work_dir, "res.json"), "w", encoding="utf-8") as f:
             json.dump(self.res, f, ensure_ascii=False, indent=4)
 
-        # 2) 保存最终 Markdown
+        # 保存最终 Markdown
         res_path = os.path.join(self.work_dir, "res.md")
         with open(res_path, "w", encoding="utf-8") as f:
             f.write(self.get_result_to_save())

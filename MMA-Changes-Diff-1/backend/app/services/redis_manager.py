@@ -1,69 +1,36 @@
 # app/services/redis_manager.py
 
-import redis.asyncio as aioredis
-from typing import Optional, Any, Dict, Union
 import json
+import re
 from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+import redis.asyncio as aioredis
+
 from app.config.setting import settings
-from app.schemas.response import Message  # v1/v2 pydantic model
 from app.utils.log_util import logger
-from uuid import uuid4
+
+
+# ========== 1 工具函数 ==========
 
 
 def _json_safe(obj: Any) -> Any:
-    """
-    递归将对象转换为 JSON 可序列化的结构：
-    - Pydantic v1/v2 -> dict()
-    - dict/list/tuple/set 递归处理（set -> list；tuple -> list）
-    - bytes -> utf-8 解码失败则转十六进制字符串
-    - 其余不可序列化对象 -> str(obj)
-    """
-    # 原生可序列化类型
+    """尽量转成可 JSON 序列化的结构；容器递归处理，其它不可序列化的转 str。"""
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
-
-    # Pydantic v2/v1
-    if hasattr(obj, "model_dump") and callable(obj.model_dump):
-        try:
-            return _json_safe(obj.model_dump())
-        except Exception:
-            pass
-    if hasattr(obj, "dict") and callable(obj.dict):
-        try:
-            return _json_safe(obj.dict())
-        except Exception:
-            pass
-
-    # 容器类型
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    if isinstance(obj, set):
-        return [_json_safe(v) for v in obj]
-
-    # bytes
-    if isinstance(obj, (bytes, bytearray, memoryview)):
-        try:
-            return bytes(obj).decode("utf-8")
-        except Exception:
-            return bytes(obj).hex()
-
-    # 其他：转字符串兜底
+        return [_json_safe(x) for x in obj]
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
     try:
+        json.dumps(obj, ensure_ascii=False)
+        return obj
+    except TypeError:
         return str(obj)
-    except Exception:
-        return f"<unserializable:{type(obj).__name__}>"
 
 
-def _normalize_message_payload(message: Union[Message, Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    统一清洗消息对象为 JSON-safe dict（不强制把 content 变成字符串）：
-    1) 支持 Pydantic v1/v2（优先用 model_dump / dict）
-    2) 兜底生成 id / msg_type
-    3) 对整个 payload 做 _json_safe，确保可序列化
-    """
-    # 1) 提取为字典
+def _normalize_message_payload(message: Union[Dict[str, Any], Any]) -> Dict[str, Any]:
+    """将任意“消息对象”规整为 JSON-safe dict；兼容 pydantic v1/v2；其它对象转字符串兜底。"""
     if hasattr(message, "model_dump"):  # pydantic v2
         raw = message.model_dump()
     elif hasattr(message, "dict"):  # pydantic v1
@@ -71,147 +38,259 @@ def _normalize_message_payload(message: Union[Message, Dict[str, Any]]) -> Dict[
     elif isinstance(message, dict):
         raw = dict(message)
     else:
-        # 极端兜底：未知类型
-        raw = {
-            "id": str(uuid4()),
-            "msg_type": "system",
-            "content": f"{message}",
-            "type": "warning",
-        }
+        raw = {"content": str(message), "msg_type": "system", "type": "info"}
 
-    # 2) id / msg_type 兜底
-    if not isinstance(raw.get("id"), str) or not raw.get("id"):
-        raw["id"] = str(uuid4())
-    if not isinstance(raw.get("msg_type"), str) or not raw.get("msg_type"):
+    if "msg_type" not in raw or not isinstance(raw.get("msg_type"), str):
         raw["msg_type"] = "system"
 
-    # 3) JSON 安全化（保持 content 的原始结构：str/dict/list…）
     payload = _json_safe(raw)
 
-    # 最后校验：如仍不可序列化，逐字段兜底
+    # 最终确保可 JSON
     try:
         json.dumps(payload, ensure_ascii=False)
     except TypeError:
-        safe_payload: Dict[str, Any] = {}
+        safe: Dict[str, Any] = {}
         for k, v in payload.items():
             try:
                 json.dumps({k: v}, ensure_ascii=False)
-                safe_payload[k] = v
+                safe[k] = v
             except TypeError:
-                safe_payload[k] = _json_safe(str(v))
-        payload = safe_payload
-
+                safe[k] = str(v)
+        payload = safe
     return payload
 
 
+# ========== 2 Redis 管理器 ==========
 class RedisManager:
+    """
+    扩展后的 Redis 管理器：
+    - 连接：get_client()
+    - 发布消息：publish_message()  -> Redis + 归档到 logs/messages/NNN.json（单文件、数组追加）
+    - 订阅：subscribe_to_task()
+    - 键值操作：set/get/delete/exists/incr
+    - Hash 操作：hset/hgetall
+    说明：
+    1) 不再写入 backend/logs/errors/*（已删除 error 落盘逻辑）。
+    2) 日志编号 NNN 与 launcher 一致：按当前最大号 + 1 生成；一次运行只使用同一个 NNN。
+    """
+
     def __init__(self):
         self.redis_url = settings.REDIS_URL
         self._client: Optional[aioredis.Redis] = None
-        # 创建消息存储目录
-        self.messages_dir = Path("logs/messages")
+
+        # 后端根目录：.../backend
+        self.backend_dir = Path(__file__).resolve().parents[2]
+
+        # 统一日志目录
+        self.logs_root: Path = self.backend_dir / "logs"
+        self.logs_root.mkdir(parents=True, exist_ok=True)
+
+        # messages（一次运行仅写一个 NNN.json；内部是 JSON 数组）
+        self.messages_dir: Path = self.logs_root / "messages"
         self.messages_dir.mkdir(parents=True, exist_ok=True)
 
+        # 运行编号（与 launcher 规则一致）
+        self.run_id: str = self._resolve_run_id()
+        self.msg_file: Path = self.messages_dir / f"{self.run_id}.json"
+
+    # ---------- 2.1 连接 ----------
     async def get_client(self) -> aioredis.Redis:
         if self._client is None:
-            self._client = aioredis.Redis.from_url(
-                self.redis_url,
-                decode_responses=True,
-                max_connections=getattr(settings, "REDIS_MAX_CONNECTIONS", None),
-            )
-        logger.info(f"Redis 连接建立成功: {self.redis_url}")
+            self._client = await aioredis.from_url(self.redis_url, decode_responses=True)
         return self._client
 
-    async def set(self, key: str, value: str):
-        """设置Redis键值对"""
+    # ---------- 2.2 基础 KV ----------
+    async def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
         client = await self.get_client()
-        await client.set(key, value)
-        # 10 小时过期（保持你原来逻辑）
-        await client.expire(key, 36000)
+        if isinstance(value, (str, bytes)):
+            v = value
+        else:
+            try:
+                v = json.dumps(value, ensure_ascii=False)
+            except TypeError:
+                v = str(value)
+        ok = await client.set(key, v, ex=ex)
+        return bool(ok)
 
-    async def _save_message_to_file(self, task_id: str, message: Union[Message, Dict[str, Any]]):
-        """将消息保存到文件中，同一任务的消息保存在同一个文件中"""
+    async def get(self, key: str) -> Any:
+        client = await self.get_client()
+        raw = await client.get(key)
+        if raw is None:
+            return None
         try:
-            payload = _normalize_message_payload(message)
+            return json.loads(raw)
+        except Exception:
+            return raw
 
-            # 确保目录存在
-            self.messages_dir.mkdir(exist_ok=True)
+    async def delete(self, *keys: str) -> int:
+        client = await self.get_client()
+        return int(await client.delete(*keys))
 
-            # 使用任务ID作为文件名
-            file_path = self.messages_dir / f"{task_id}.json"
+    async def exists(self, key: str) -> bool:
+        client = await self.get_client()
+        return bool(await client.exists(key))
 
-            # 读取现有消息（如果文件存在）
-            messages = []
-            if file_path.exists():
-                with open(file_path, "r", encoding="utf-8") as f:
-                    try:
-                        messages = json.load(f)
-                    except Exception:
-                        messages = []
+    async def incr(self, key: str) -> int:
+        client = await self.get_client()
+        return int(await client.incr(key))
 
-            # 添加新消息
-            messages.append(payload)
+    # ---------- 2.3 Hash ----------
+    async def hset(self, name: str, mapping: Dict[str, Any]) -> int:
+        client = await self.get_client()
+        safe_map: Dict[str, str] = {}
+        for k, v in (mapping or {}).items():
+            if isinstance(v, (str, bytes, int, float, bool)) or v is None:
+                safe_map[str(k)] = "" if v is None else str(v)
+            else:
+                try:
+                    safe_map[str(k)] = json.dumps(v, ensure_ascii=False)
+                except TypeError:
+                    safe_map[str(k)] = str(v)
+        return int(await client.hset(name, mapping=safe_map))
 
-            # 保存所有消息到文件
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(messages, f, ensure_ascii=False, indent=2)
+    async def hgetall(self, name: str) -> Dict[str, Any]:
+        client = await self.get_client()
+        data = await client.hgetall(name)
+        out: Dict[str, Any] = {}
+        for k, v in data.items():
+            try:
+                out[k] = json.loads(v)
+            except Exception:
+                out[k] = v
+        return out
 
-            logger.debug(f"消息已追加到文件: {file_path}")
-        except Exception as e:
-            logger.error(f"保存消息到文件失败: {str(e)}")
-            # 不抛异常，保证主流程不受影响
-
-    async def publish_message(self, task_id: str, message: Union[Message, Dict[str, Any]]):
+    # ---------- 2.4 发布/订阅 ----------
+    async def publish_message(self, task_id: str, message: Union[Dict[str, Any], Any]):
         """
-        发布消息到特定任务的频道并保存到文件
-        - 仅对“最外层 payload”序列化一次
-        - 不再把 payload['content'] 强制转为字符串
+        发布任务消息到 Redis，并把消息**追加**到 logs/messages/NNN.json（数组）。
+        不再写入 logs/errors。
         """
         client = await self.get_client()
         channel = f"task:{task_id}:messages"
         payload = _normalize_message_payload(message)
-        try:
-            # 构造预览字符串（不改变 content 原类型）
+
+        # 发布到 Redis
+        msg_json = json.dumps(payload, ensure_ascii=False)
+        publish_result = await client.publish(channel, msg_json)
+
+        # 归档到单一文件（数组追加）
+        path = self._append_message_json(payload)
+
+        # 控制台日志
+        preview = payload.get("content", "")
+        if not isinstance(preview, str):
             try:
-                content_preview = (
-                    payload.get("content", "")
-                    if isinstance(payload.get("content", ""), str)
-                    else json.dumps(payload.get("content", ""), ensure_ascii=False)
-                )
+                preview = json.dumps(preview, ensure_ascii=False)
             except Exception:
-                content_preview = "<preview 生成失败>"
-
-            # 仅序列化一层
-            message_json = json.dumps(payload, ensure_ascii=False)
-            publish_result = await client.publish(channel, message_json)
-            logger.info(
-                f"发布到频道 {channel} 成功，订阅者数量: {publish_result}. "
-                f"msg_type:{payload.get('msg_type')} "
-                f"content_preview:{str(content_preview)[:200]}"
-            )
-
-            # 落盘
-            await self._save_message_to_file(task_id, payload)
-
-            return publish_result
-
-        except Exception as e:
-            logger.exception(f"发布消息失败: task_id={task_id} channel={channel} error={e}")
-            raise
+                preview = str(preview)
+        logger.info(
+            f"发布到频道 {channel} 成功，订阅者数量: {publish_result}. "
+            f"消息已写入: {path.name}. 预览: {preview[:200]}"
+        )
 
     async def subscribe_to_task(self, task_id: str):
-        """订阅特定任务的消息"""
         client = await self.get_client()
         pubsub = client.pubsub()
         await pubsub.subscribe(f"task:{task_id}:messages")
         return pubsub
 
     async def close(self):
-        """关闭Redis连接"""
         if self._client:
             await self._client.close()
             self._client = None
 
+    # ---------- 2.5 内部：编号 & 归档 ----------
+    def _resolve_run_id(self, pad: int = 3) -> str:
+        """与 launcher 相同策略：work_dir -> messages -> laucher，自增 1。"""
+        # 1) backend/project/work_dir 下的数字目录
+        try:
+            work_dir = self.backend_dir / "project" / "work_dir"
+            if work_dir.exists():
+                max_n = 0
+                for p in work_dir.iterdir():
+                    m = re.fullmatch(r"(\d+)", p.name)
+                    if m:
+                        try:
+                            n = int(m.group(1))
+                            if n > max_n:
+                                max_n = n
+                        except Exception:
+                            pass
+                return f"{max_n + 1:0{pad}d}"
+        except Exception:
+            pass
 
-# singleton
+        # 2) backend/logs/messages 下的 NNN.json
+        try:
+            msg_dir = self.backend_dir / "logs" / "messages"
+            if msg_dir.exists():
+                max_n = 0
+                for p in msg_dir.iterdir():
+                    m = re.search(r"(\d+)\.json$", p.name)
+                    if m:
+                        try:
+                            n = int(m.group(1))
+                            if n > max_n:
+                                max_n = n
+                        except Exception:
+                            pass
+                return f"{max_n + 1:0{pad}d}"
+        except Exception:
+            pass
+
+        # 3) backend/logs/laucher 下的 NNN.log
+        try:
+            lau = self.backend_dir / "logs" / "laucher"
+            idx = 1
+            if lau.exists():
+                for p in lau.glob("*.log"):
+                    m = re.match(r"(\d{3})\.log$", p.name)
+                    if m:
+                        try:
+                            idx = max(idx, int(m.group(1)) + 1)
+                        except Exception:
+                            pass
+            return f"{idx:0{pad}d}"
+        except Exception:
+            return f"{1:0{pad}d}"
+
+    def _append_message_json(self, payload: Dict[str, Any]) -> Path:
+        """
+        将 payload 追加到 NNN.json 的数组中。
+        - 文件不存在：创建为 [payload]
+        - 文件是单个对象：转为 [obj, payload]
+        - 文件是数组：append 后整体重写（简单可靠）
+        """
+        try:
+            if not self.msg_file.exists():
+                self.msg_file.write_text(json.dumps([payload], ensure_ascii=False, indent=2), encoding="utf-8")
+                return self.msg_file
+
+            text = self.msg_file.read_text(encoding="utf-8")
+            text_stripped = text.strip()
+            data: Union[Dict[str, Any], list]
+
+            if not text_stripped:
+                data = []
+            else:
+                try:
+                    data = json.loads(text_stripped)
+                except json.JSONDecodeError:
+                    # 如果历史文件不是合法 JSON，兜底：当成单条对象
+                    data = []
+
+            if isinstance(data, dict):
+                data = [data]
+
+            if not isinstance(data, list):
+                data = []
+
+            data.append(payload)
+            self.msg_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.exception(f"写入消息 JSON 失败: {e}")
+        return self.msg_file
+
+
+# 单例
 redis_manager = RedisManager()

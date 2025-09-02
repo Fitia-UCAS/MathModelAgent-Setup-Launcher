@@ -68,12 +68,23 @@ def copy_project_subdir(subdir_name, full_dir, ignore_extra_patterns=None):
         "logs",
         ".DS_Store",
         "Thumbs.db",
+        "*/example",  # 忽略 example 目录本身
+        "*/example/*",  # 忽略 example 目录下所有文件
+        "*/project",
+        "*/project/*",
     ]
     if ignore_extra_patterns:
         default_ignores.extend(ignore_extra_patterns)
 
     ignore = shutil.ignore_patterns(*default_ignores)
     shutil.copytree(src_dir, dest_dir, ignore=ignore)
+
+    # 删除残留的 example 目录（防止之前已复制过）
+    example_path = os.path.join(dest_dir, "app", "example")
+    if os.path.exists(example_path):
+        shutil.rmtree(example_path)
+        print(f"已删除残留的 example 目录: {example_path}")
+
     print(f"已复制整个 {subdir_name} → {dest_dir}")
     print(f"（忽略模式：{default_ignores}）")
 
@@ -81,10 +92,10 @@ def copy_project_subdir(subdir_name, full_dir, ignore_extra_patterns=None):
 if __name__ == "__main__":
     # 改动文件复制目录
     diff_target_1 = r"E:/repo1/MathModelAgent-DeploymentScript/MMA-Changes-Diff-1"
-    diff_target_2 = r"tools/MMA-Changes-Diff-1"
-
     copy_changed_files(diff_target_1)
-    copy_changed_files(diff_target_2)
+
+    # diff_target_2 = r"tools/MMA-Changes-Diff-1"
+    # copy_changed_files(diff_target_2)
 
     # 完整目录复制目标
     full_target = r"E:/repo1/MathModelAgent-DeploymentScript/MMA-Changes-Full-1"

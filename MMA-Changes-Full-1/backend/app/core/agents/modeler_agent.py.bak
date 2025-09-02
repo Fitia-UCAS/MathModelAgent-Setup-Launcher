@@ -69,7 +69,7 @@ class ModelerAgent(Agent):
         )
 
         raw_content = getattr(response.choices[0].message, "content", "") or ""
-        logger.info(f"[ModelerAgent] raw preview: {raw_content[:2000]}")
+        logger.debug(f"[ModelerAgent] raw preview: {raw_content[:2000]}")
 
         # 3.2.4 轻清洗（不改变语义）
         content = raw_content
