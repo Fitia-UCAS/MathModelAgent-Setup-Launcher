@@ -1266,7 +1266,7 @@ class PySourceDumper:
     def write_backend_app_snapshot(project_root: Path, out_txt: Path):
         """
         将 backend/app 下所有 .py 源码快照写入 out_txt。
-        文件名应形如：后端现有的项目源码_NNN.txt（NNN 与本次 launcher 日志编号一致）
+        文件名应形如：源码快照_NNN.txt（NNN 与本次 launcher 日志编号一致）
         """
         scan_dir = project_root / "backend" / "app"
         out_txt.parent.mkdir(parents=True, exist_ok=True)
@@ -1277,7 +1277,7 @@ class PySourceDumper:
             fp.write(PySourceDumper._generate_directory_structure(scan_dir))
             fp.write("\n\n")
 
-            # 源码正文
+            # 源码快照正文
             sep = "=" * 80
             for fpath in PySourceDumper._iter_py_files(scan_dir):
                 try:
@@ -1313,7 +1313,7 @@ class MathModelAgentLauncher:
         # 与日志同编号输出源码快照到 backend/logs/launcher/
         try:
             base = _GLOBAL_LOGGER.path.stem  # 例如 "002"
-            snapshot_path = _GLOBAL_LOGGER.path.parent / f"后端现有的项目源码_{base}.txt"
+            snapshot_path = _GLOBAL_LOGGER.path.parent / f"源码快照_{base}.txt"
             PySourceDumper.write_backend_app_snapshot(self.project_root, snapshot_path)
             ConsolePrinter.print(self.name, f"Wrote backend/app sources to {snapshot_path}")
         except Exception as e:
