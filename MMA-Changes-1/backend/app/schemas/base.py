@@ -1,1 +1,0 @@
-# app/schemas/base.py
